@@ -1,0 +1,173 @@
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+from typing import List
+import asyncio
+
+from .. import schemas, crud
+from ..database import get_db
+from ..services.moex_service import refresh_all_prices
+from ..services.moex_dividends import get_portfolio_dividends, get_portfolio_dividends_all
+from ..services.moex_coupons import get_portfolio_coupons
+from ..services.auto_accrual import check_and_process_accruals
+from ..load_moex_securities import load_all_securities
+
+router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
+
+
+@router.get("/", response_model=List[schemas.PortfolioResponse])
+def list_portfolios(db: Session = Depends(get_db)):
+    return crud.get_portfolios(db)
+
+
+@router.post("/", response_model=schemas.PortfolioResponse, status_code=201)
+def create_portfolio(data: schemas.PortfolioCreate, db: Session = Depends(get_db)):
+    return crud.create_portfolio(db, data)
+
+
+@router.get("/default", response_model=schemas.PortfolioResponse)
+def get_default_portfolio(db: Session = Depends(get_db)):
+    portfolio = crud.get_default_portfolio(db)
+    return portfolio
+
+
+@router.get("/{portfolio_id}", response_model=schemas.PortfolioResponse)
+def get_portfolio(portfolio_id: int, db: Session = Depends(get_db)):
+    portfolio = crud.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    return portfolio
+
+
+@router.get("/{portfolio_id}/dashboard", response_model=schemas.DashboardResponse)
+def get_dashboard(portfolio_id: int, db: Session = Depends(get_db)):
+    portfolio = crud.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    return crud.get_dashboard(db, portfolio_id)
+
+
+@router.get("/{portfolio_id}/securities", response_model=List[schemas.PortfolioSecurityResponse])
+def get_portfolio_securities(portfolio_id: int, db: Session = Depends(get_db)):
+    """Get securities that are in the portfolio (have positions/transactions)"""
+    portfolio = crud.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    return crud.get_portfolio_securities(db, portfolio_id)
+
+
+@router.get("/{portfolio_id}/dividends")
+async def portfolio_dividends(
+    portfolio_id: int,
+    all: bool = Query(False, description="Show all dividends including past"),
+    db: Session = Depends(get_db),
+):
+    """Get dividends for portfolio securities from MOEX"""
+    portfolio = crud.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    if all:
+        dividends = await get_portfolio_dividends_all(db, portfolio_id)
+    else:
+        dividends = await get_portfolio_dividends(db, portfolio_id)
+    return dividends
+
+
+@router.get("/{portfolio_id}/coupons")
+async def portfolio_coupons(
+    portfolio_id: int,
+    upcoming: bool = Query(False, description="Only upcoming coupons"),
+    db: Session = Depends(get_db),
+):
+    """Get coupons for OFZ/bonds in portfolio"""
+    portfolio = crud.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    coupons = await get_portfolio_coupons(db, portfolio_id, upcoming_only=upcoming)
+    return coupons
+
+
+@router.post("/{portfolio_id}/process-accruals")
+async def process_accruals(portfolio_id: int, db: Session = Depends(get_db)):
+    """Auto-process historical dividends and coupons into accrual transactions"""
+    portfolio = crud.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    result = await check_and_process_accruals(db, portfolio_id)
+    return result
+
+
+@router.post("/refresh-prices")
+async def refresh_prices(db: Session = Depends(get_db)):
+    """Refresh current prices for all securities from MOEX API"""
+    try:
+        updated = await refresh_all_prices(db)
+        return {"status": "ok", "updated": updated}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh prices: {str(e)}")
+
+
+# === Positions ===
+@router.get("/{portfolio_id}/positions", response_model=List[schemas.PositionResponse])
+def list_positions(portfolio_id: int, db: Session = Depends(get_db)):
+    portfolio = crud.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    return crud.get_positions(db, portfolio_id)
+
+
+@router.post("/{portfolio_id}/positions", response_model=schemas.PositionResponse, status_code=201)
+def create_position(portfolio_id: int, data: schemas.PositionCreate, db: Session = Depends(get_db)):
+    portfolio = crud.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    security = crud.get_security(db, data.security_id)
+    if not security:
+        raise HTTPException(status_code=404, detail="Security not found")
+    return crud.create_position(db, portfolio_id, data)
+
+
+@router.put("/{portfolio_id}/positions/{position_id}", response_model=schemas.PositionResponse)
+def update_position(portfolio_id: int, position_id: int, data: schemas.PositionUpdate, db: Session = Depends(get_db)):
+    position = crud.update_position(db, position_id, data)
+    if not position:
+        raise HTTPException(status_code=404, detail="Position not found")
+    return position
+
+
+@router.delete("/{portfolio_id}/positions/{position_id}", status_code=204)
+def delete_position(portfolio_id: int, position_id: int, db: Session = Depends(get_db)):
+    if not crud.delete_position(db, position_id):
+        raise HTTPException(status_code=404, detail="Position not found")
+
+
+# === Transactions ===
+@router.get("/{portfolio_id}/transactions", response_model=List[schemas.TransactionResponse])
+def list_transactions(
+    portfolio_id: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    portfolio = crud.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    return crud.get_transactions(db, portfolio_id, skip=skip, limit=limit)
+
+
+@router.post("/{portfolio_id}/transactions", response_model=schemas.TransactionResponse, status_code=201)
+def create_transaction(portfolio_id: int, data: schemas.TransactionCreate, db: Session = Depends(get_db)):
+    portfolio = crud.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    security = crud.get_security(db, data.security_id)
+    if not security:
+        raise HTTPException(status_code=404, detail="Security not found")
+    return crud.create_transaction(db, portfolio_id, data)
+
+
+@router.delete("/{portfolio_id}/transactions/{transaction_id}", status_code=204)
+def delete_transaction(portfolio_id: int, transaction_id: int, db: Session = Depends(get_db)):
+    transaction = crud.get_transaction(db, transaction_id)
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    crud.delete_transaction(db, transaction_id)
