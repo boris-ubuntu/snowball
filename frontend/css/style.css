@@ -1,8 +1,8 @@
 :root {
-    --bg-primary: #0f172a;
-    --bg-secondary: #1e293b;
-    --bg-card: #1e293b;
-    --bg-hover: #334155;
+    --bg-primary: #282832;
+    --bg-secondary: #32323e;
+    --bg-card: #32323e;
+    --bg-hover: #4d505f;
     --text-primary: #f1f5f9;
     --text-secondary: #94a3b8;
     --text-muted: #64748b;
@@ -12,7 +12,7 @@
     --green-bg: rgba(34, 197, 94, 0.1);
     --red: #ef4444;
     --red-bg: rgba(239, 68, 68, 0.1);
-    --border: #334155;
+    --border: #4d505f;
     --radius: 12px;
     --radius-sm: 8px;
     --shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
@@ -93,9 +93,9 @@ header {
 }
 
 .nav-btn.active {
-    background: var(--accent);
-    color: white;
-    border-color: var(--accent);
+    background: #4d505f;
+    color: var(--text-primary);
+    border-color: #4d505f;
 }
 
 .header-right {
@@ -142,10 +142,6 @@ header {
     transform: translateY(-2px);
     box-shadow: var(--shadow);
 }
-
-.card-total { border-left: 3px solid var(--accent); }
-.card-return { border-left: 3px solid var(--green); }
-.card-accruals { border-left: 3px solid var(--accent-light); }
 
 .card-sub {
     font-size: 0.75rem;
