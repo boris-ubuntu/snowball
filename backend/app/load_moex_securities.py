@@ -108,12 +108,53 @@ async def load_all_securities(db: Session) -> int:
     return added
 
 
+def ensure_currency_securities(db: Session) -> int:
+    """Ensure 5 major currency securities exist in the database."""
+    from .services.cbr_service import CURRENCY_INFO
+
+    currencies = [
+        {"ticker": "RUB", "name_ru": "Российский рубль", "name_en": "Russian Ruble"},
+        {"ticker": "USD", "name_ru": "Доллар США", "name_en": "US Dollar"},
+        {"ticker": "EUR", "name_ru": "Евро", "name_en": "Euro"},
+        {"ticker": "CNY", "name_ru": "Китайский юань", "name_en": "Chinese Yuan"},
+        {"ticker": "AED", "name_ru": "Дирхам ОАЭ", "name_en": "UAE Dirham"},
+    ]
+
+    existing = {s.ticker for s in db.query(models.Security).all()}
+    added = 0
+
+    for c in currencies:
+        if c["ticker"] not in existing:
+            sec = models.Security(
+                ticker=c["ticker"],
+                name=c["name_ru"],
+                short_name=c["name_en"],
+                security_type="currency",
+                currency=c["ticker"],
+                lot_size=1,
+                exchange="CBR",
+            )
+            db.add(sec)
+            existing.add(c["ticker"])
+            added += 1
+            logger.info(f"Added currency security: {c['ticker']} - {c['name_ru']}")
+
+    if added > 0:
+        db.commit()
+        logger.info(f"Added {added} currency securities")
+    else:
+        logger.info("All currency securities already exist")
+
+    return added
+
+
 async def main():
     logging.basicConfig(level=logging.INFO)
     db = SessionLocal()
     try:
         added = await load_all_securities(db)
-        print(f"✅ Added {added} new securities from MOEX")
+        added += ensure_currency_securities(db)
+        print(f"✅ Added {added} new securities (including currencies)")
     finally:
         db.close()
 

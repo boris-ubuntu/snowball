@@ -95,4 +95,12 @@ const API = {
         const params = securityId ? `?security_id=${securityId}` : '';
         return this.request(`/dividends/${params}`);
     },
+
+    // Exchange Rates (CBR)
+    getCbrRates() {
+        return this.request('/rates/cbr');
+    },
+    refreshCbrRates() {
+        return this.request('/rates/cbr/refresh', { method: 'POST' });
+    },
 };

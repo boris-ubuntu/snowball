@@ -4,7 +4,7 @@ from typing import List, Optional
 import asyncio
 from datetime import datetime
 
-from .. import schemas, crud
+from .. import schemas, crud, models
 from ..database import get_db
 from ..services.moex_service import get_current_price
 from ..services.moex_ofz_loader import search_moex_security, load_ofz_bonds
@@ -14,10 +14,48 @@ router = APIRouter(prefix="/api/securities", tags=["securities"])
 
 @router.get("/search")
 async def search_securities(q: str = Query("", description="Search query"), db: Session = Depends(get_db)):
-    """Search MOEX for securities by ticker, name or ISIN"""
+    """Search MOEX and local DB for securities by ticker, name"""
     if not q or len(q) < 2:
         return []
-    return await search_moex_security(q)
+
+    q_upper = q.upper().strip()
+
+    # First, search local DB for currencies and other matches
+    local_results = (
+        db.query(models.Security)
+        .filter(
+            (models.Security.ticker.ilike(f"%{q_upper}%")) |
+            (models.Security.name.ilike(f"%{q}%")) |
+            (models.Security.short_name.ilike(f"%{q}%"))
+        )
+        .limit(10)
+        .all()
+    )
+
+    result = []
+    for sec in local_results:
+        result.append({
+            "secid": sec.ticker,
+            "shortname": sec.name,
+            "isin": sec.isin or "",
+            "group": sec.security_type,
+            "currency": sec.currency or "RUB",
+            "exchange": sec.exchange or "LOCAL",
+        })
+
+    # Also search MOEX for additional securities
+    try:
+        moex_results = await search_moex_security(q)
+        # Deduplicate by secid
+        existing_secids = {r["secid"] for r in result}
+        for mr in moex_results:
+            if mr.get("secid") not in existing_secids:
+                result.append(mr)
+                existing_secids.add(mr.get("secid"))
+    except Exception as e:
+        print(f"MOEX search error: {e}")
+
+    return result
 
 
 @router.post("/load-ofz")

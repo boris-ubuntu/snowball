@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from .config import settings
 from .database import init_db, check_db_connection
-from .routers import securities, portfolio, dividends
+from .routers import securities, portfolio, dividends, rates
 from .load_moex_securities import load_all_securities
 from .database import SessionLocal
 import os
@@ -29,6 +29,7 @@ app.add_middleware(
 app.include_router(securities.router)
 app.include_router(portfolio.router)
 app.include_router(dividends.router)
+app.include_router(rates.router)
 
 
 @app.get("/api/health")
@@ -48,12 +49,14 @@ def on_startup():
         init_db()
         print(f"✅ Database initialized successfully")
         
-        # Load all MOEX securities in background
+        # Load all MOEX securities and ensure currencies in background
         def load_moex():
             try:
                 import asyncio
                 db = SessionLocal()
                 asyncio.run(load_all_securities(db))
+                from .load_moex_securities import ensure_currency_securities
+                ensure_currency_securities(db)
                 db.close()
             except Exception as e:
                 print(f"⚠️ Could not auto-load MOEX securities: {e}")

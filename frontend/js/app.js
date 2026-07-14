@@ -10,6 +10,9 @@ const App = {
         // Bind refresh
         document.getElementById('refresh-btn').addEventListener('click', () => this.refreshPrices());
 
+        // Header transaction button opens modal
+        document.getElementById('add-transaction-header-btn').addEventListener('click', () => this.openTransactionModal());
+
         // Navigation
         document.getElementById('nav-main').addEventListener('click', () => {
             this.showPage('main');
@@ -180,6 +183,12 @@ const App = {
         await this.loadDashboard(true);
         // Also refresh dividends histogram
         await DividendsHistogram.load(this.portfolioId);
+    },
+
+    openTransactionModal() {
+        if (typeof ModalComponent !== 'undefined' && ModalComponent.open) {
+            ModalComponent.open();
+        }
     },
 
     showError(msg) {

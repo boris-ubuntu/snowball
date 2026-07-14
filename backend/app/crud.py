@@ -338,8 +338,16 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
         models.Transaction.transaction_type == "accrual",
     ).scalar() or 0
     
-    total_invested = 0
-    total_value = 0
+    # Fetch CBR exchange rates for currency conversion
+    import asyncio
+    from .services.cbr_service import fetch_cbr_rates, convert_to_rub
+    try:
+        cbr_rates = asyncio.run(fetch_cbr_rates())
+    except Exception:
+        cbr_rates = {"RUB": 1.0, "USD": 88.0, "EUR": 96.0, "CNY": 12.0, "AED": 24.0}
+    
+    total_invested = 0  # in RUB
+    total_value = 0  # in RUB
     total_invested_income_assets = 0
     position_list = []
 
@@ -347,21 +355,28 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
         if not pos.security:
             continue
         
-        cost = (pos.avg_price or 0) * pos.quantity
-        current_price = pos.security.current_price or pos.avg_price or 0
-        value = current_price * pos.quantity
+        # Determine currency for this position
+        sec_currency = pos.security.currency or "RUB"
         
-        total_invested += cost
-        total_value += value
+        cost_in_currency = (pos.avg_price or 0) * pos.quantity
+        market_price_currency = pos.security.current_price or pos.avg_price or 0
+        value_in_currency = market_price_currency * pos.quantity
+        
+        # Convert to RUB
+        cost_rub = convert_to_rub(cost_in_currency, sec_currency, cbr_rates)
+        value_rub = convert_to_rub(value_in_currency, sec_currency, cbr_rates)
+        
+        total_invested += cost_rub
+        total_value += value_rub
         
         if pos.security.security_type in ("stock", "bond", "ofz"):
-            total_invested_income_assets += cost
+            total_invested_income_assets += cost_rub
         
         accruals = pos.total_accruals or 0
-        profit = value - cost + accruals
+        profit = value_rub - cost_rub + accruals
         
-        if cost > 0:
-            profit_percent = ((value + accruals) / cost - 1) * 100
+        if cost_rub > 0:
+            profit_percent = ((value_rub + accruals) / cost_rub - 1) * 100
         else:
             profit_percent = 0
 
@@ -372,9 +387,9 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
             security_type=pos.security.security_type,
             quantity=pos.quantity,
             avg_price=pos.avg_price,
-            current_price=current_price,
-            total_cost=round(cost, 2),
-            total_value=round(value, 2),
+            current_price=market_price_currency,
+            total_cost=round(cost_rub, 2),
+            total_value=round(value_rub, 2),
             total_accruals=round(accruals, 2),
             profit=round(profit, 2),
             profit_percent=round(profit_percent, 2),
