@@ -7,7 +7,6 @@ const SummaryComponent = {
         const totalAccrualsEl = document.getElementById('total-accruals');
         const accrualsPercentEl = document.getElementById('accruals-percent');
         const expectedIncomeEl = document.getElementById('expected-income');
-        const expectedYieldEl = document.getElementById('expected-yield');
 
         if (totalValueEl) {
             totalValueEl.textContent = Utils.formatCurrency(summary.total_value);
@@ -27,18 +26,17 @@ const SummaryComponent = {
             const pct = summary.total_value > 0
                 ? (summary.total_accruals / summary.total_value * 100)
                 : 0;
-            accrualsPercentEl.textContent = Utils.formatPercent(pct) + ' от стоимости';
+            const expectedText = summary.expected_annual_income > 0
+                ? Utils.formatCurrency(summary.expected_annual_income)
+                : '—';
+            accrualsPercentEl.innerHTML = `Ожидается за 12 мес: <span id="expected-income">${expectedText}</span>`;
         }
 
         if (expectedIncomeEl) {
-            expectedIncomeEl.textContent = Utils.formatCurrency(summary.expected_annual_income);
-        }
-
-        if (expectedYieldEl) {
-            const yieldText = summary.expected_income_yield > 0 
-                ? Utils.formatPercent(summary.expected_income_yield) 
+            const text = summary.expected_annual_income > 0
+                ? Utils.formatCurrency(summary.expected_annual_income)
                 : '—';
-            expectedYieldEl.textContent = yieldText;
+            expectedIncomeEl.textContent = text;
         }
     },
 };
