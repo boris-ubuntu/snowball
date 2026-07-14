@@ -34,7 +34,7 @@
                 <section id="summary-section">
                     <div class="summary-grid">
                         <div class="summary-card card-total">
-                            <div class="card-label">💰 Стоимость</div>
+                            <div class="card-label">💵 Стоимость</div>
                             <div class="card-value" id="total-value">—</div>
                             <div class="card-sub">Вложено: <span id="total-invested"></span></div>
                         </div>
@@ -54,7 +54,7 @@
                 <!-- Portfolio Composition Chart -->
                 <section id="chart-section">
                     <div class="section-header">
-                        <h3>🎯 Портфель</h3>
+                        <h3>Портфель</h3>
                     </div>
                     <div class="chart-container">
                         <canvas id="composition-chart"></canvas>
@@ -64,15 +64,14 @@
                 <!-- Positions Table -->
                 <section id="positions-section">
                     <div class="section-header">
-                        <h3>📋 Текущие позиции</h3>
-                        <button id="add-transaction-btn" class="btn-primary">+ Сделка</button>
+                        <h3>Текущие позиции</h3>
+                        <button id="add-transaction-btn" class="btn-round-add">+</button>
                     </div>
                     <div class="table-wrapper">
                         <table id="positions-table">
                             <thead>
                                 <tr>
                                     <th>Название</th>
-                                    <th>Тикер</th>
                                     <th>Тип</th>
                                     <th>Кол-во</th>
                                     <th>Средняя</th>
@@ -83,7 +82,7 @@
                                 </tr>
                             </thead>
                             <tbody id="positions-body">
-                                <tr><td colspan="9" class="loading">Загрузка...</td></tr>
+                                <tr><td colspan="8" class="loading">Загрузка...</td></tr>
                             </tbody>
                         </table>
                     </div>

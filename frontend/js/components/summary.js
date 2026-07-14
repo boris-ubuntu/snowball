@@ -20,9 +20,10 @@ const SummaryComponent = {
             totalInvestedEl.textContent = Utils.formatCurrency(summary.total_invested);
         }
 
-        // Прибыль — только сумма, без процентов
+        // Прибыль — только сумма с треугольником, без процентов
         if (totalReturnEl) {
-            totalReturnEl.textContent = Utils.formatCurrency(summary.total_return);
+            const prefix = summary.total_return >= 0 ? '▲' : '▼';
+            totalReturnEl.textContent = prefix + ' ' + Utils.formatCurrency(Math.abs(summary.total_return));
             totalReturnEl.className = 'card-value ' + (summary.total_return >= 0 ? 'positive' : 'negative');
         }
 
@@ -36,9 +37,9 @@ const SummaryComponent = {
             const pct = summary.total_invested > 0
                 ? ((summary.total_value + summary.total_accruals) / summary.total_invested - 1) * 100
                 : 0;
-            const sign = pct >= 0 ? '' : '▼ ';
+            const prefix = pct >= 0 ? '▲' : '▼';
             const colorClass = pct >= 0 ? 'positive' : 'negative';
-            totalAccrualsEl.textContent = sign + Utils.formatPercent(pct);
+            totalAccrualsEl.textContent = prefix + ' ' + Utils.formatPercent(Math.abs(pct));
             totalAccrualsEl.className = 'card-value ' + colorClass;
         }
 

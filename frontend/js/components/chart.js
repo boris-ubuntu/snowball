@@ -39,15 +39,7 @@ const ChartComponent = {
                 maintainAspectRatio: false,
                 plugins: {
                     legend: {
-                        position: 'right',
-                        labels: {
-                            color: '#94a3b8',
-                            padding: 12,
-                            font: { size: 12 },
-                            usePointStyle: true,
-                            pointStyle: 'circle',
-                            pointStyleWidth: 10,
-                        },
+                        display: false,
                     },
                     tooltip: {
                         callbacks: {
