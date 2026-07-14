@@ -261,6 +261,15 @@ header {
     opacity: 0.85;
 }
 
+/* Main page dividends histogram */
+#main-dividends-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 24px;
+}
+
 /* Chart */
 #chart-section {
     background: var(--bg-card);

@@ -14,10 +14,13 @@ const App = {
         document.getElementById('nav-main').addEventListener('click', () => {
             this.showPage('main');
             this.loadDashboard();
+            DividendsHistogram.load(this.portfolioId);
         });
         document.getElementById('nav-assets').addEventListener('click', () => {
             this.showPage('assets');
             SecuritiesManager.load(this.portfolioId);
+            // Load positions when assets page is shown
+            this.loadAssetsPositions();
         });
         document.getElementById('nav-operations').addEventListener('click', () => {
             this.showPage('operations');
@@ -52,11 +55,24 @@ const App = {
             // Load main page
             await this.loadDashboard();
 
+            // Load dividends histogram on main page
+            await DividendsHistogram.load(this.portfolioId);
+
             // Load assets
             await SecuritiesManager.load(this.portfolioId);
         } catch (e) {
             console.error('Failed to initialize:', e);
             this.showError('Не удалось подключиться к серверу. Запустите бэкенд.');
+        }
+    },
+
+    async loadAssetsPositions() {
+        if (!this.portfolioId) return;
+        try {
+            const data = await API.getDashboard(this.portfolioId);
+            PositionsComponent.render(data);
+        } catch (e) {
+            console.error('Failed to load positions:', e);
         }
     },
 
@@ -134,10 +150,10 @@ const App = {
     },
 
     renderDashboard(data) {
-        // Render all components
+        // Render all components on main page
         SummaryComponent.render(data);
         ChartComponent.render(data);
-        PositionsComponent.render(data);
+        // Positions are now shown on assets page, not main page
     },
 
     async refreshPrices() {
@@ -162,6 +178,8 @@ const App = {
     async refreshDashboard() {
         this.dashboardData = null;
         await this.loadDashboard(true);
+        // Also refresh dividends histogram
+        await DividendsHistogram.load(this.portfolioId);
     },
 
     showError(msg) {
