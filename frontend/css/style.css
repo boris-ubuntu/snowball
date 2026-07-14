@@ -695,6 +695,85 @@ tbody tr:last-child td { border-bottom: none; }
     display: none !important;
 }
 
+/* Histogram for dividends */
+.div-histogram {
+    padding: 16px 8px;
+    overflow-x: auto;
+}
+
+.histogram-container {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    min-height: 200px;
+    padding: 10px 0;
+}
+
+.histogram-bar-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    min-width: 50px;
+}
+
+.histogram-value {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--green);
+    margin-bottom: 4px;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.histogram-bar {
+    width: 100%;
+    max-width: 48px;
+    min-height: 8px;
+    background: linear-gradient(180deg, var(--accent-light), var(--accent));
+    border-radius: 4px 4px 0 0;
+    cursor: pointer;
+    position: relative;
+    transition: opacity 0.2s;
+}
+
+.histogram-bar:hover {
+    opacity: 0.8;
+}
+
+.histogram-bar.current {
+    background: linear-gradient(180deg, var(--green), #16a34a);
+}
+
+.histogram-tooltip {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    z-index: 10;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.histogram-bar:hover .histogram-tooltip {
+    display: block;
+}
+
+.histogram-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 6px;
+    line-height: 1.2;
+}
+
 /* Responsive */
 @media (max-width: 640px) {
     .summary-grid {

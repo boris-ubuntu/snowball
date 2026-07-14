@@ -1,5 +1,6 @@
 const DividendsComponent = {
     portfolioId: null,
+    showHistory: false,
 
     async load(portfolioId) {
         this.portfolioId = portfolioId || this.portfolioId;
@@ -31,6 +32,11 @@ const DividendsComponent = {
         }
     },
 
+    toggleHistory() {
+        this.showHistory = !this.showHistory;
+        this.load();
+    },
+
     render(dividends, coupons) {
         const container = document.getElementById('dividends-list');
 
@@ -41,16 +47,46 @@ const DividendsComponent = {
             <button class="btn-primary" onclick="DividendsComponent.processAccruals()">💰 Начислить прошедшие дивиденды/купоны</button>
         </div>`;
 
-        // Upcoming Coupons section
+        // Monthly histogram chart
+        const monthlyData = this.buildMonthlyData(dividends, coupons);
+        html += `<div class="div-section-label">📊 Будущие выплаты по месяцам</div>`;
+        html += `<div class="div-histogram">`;
+        html += this.renderHistogram(monthlyData);
+        html += `</div>`;
+
+        // Upcoming Coupons list
         if (coupons && coupons.length > 0) {
-            html += `<div class="div-section-label">💰 Предстоящие купоны (ОФЗ/облигации)</div>`;
-            html += coupons.map(coup => this.renderCouponItem(coup)).join('');
+            const now = new Date();
+            const upcomingCoups = coupons.filter(c => new Date(c.coupon_date) >= now);
+            if (upcomingCoups.length > 0) {
+                html += `<div class="div-section-label">💰 Предстоящие купоны (ОФЗ/облигации)</div>`;
+                html += upcomingCoups.map(coup => this.renderCouponItem(coup)).join('');
+            }
         }
 
-        // Dividends history
+        // Dividends - upcoming only by default, with toggle for history
         if (dividends && dividends.length > 0) {
-            html += `<div class="div-section-label">📜 История дивидендов</div>`;
-            html += dividends.map(div => this.renderItem(div)).join('');
+            const now = new Date();
+            const upcoming = dividends.filter(d => new Date(d.registry_close_date) >= now);
+            const past = dividends.filter(d => new Date(d.registry_close_date) < now);
+
+            if (upcoming.length > 0) {
+                html += `<div class="div-section-label">💵 Предстоящие дивиденды</div>`;
+                html += upcoming.map(div => this.renderItem(div)).join('');
+            }
+
+            // History toggle
+            if (past.length > 0) {
+                html += `<div style="text-align:center;padding:12px;">
+                    <button class="btn-secondary" onclick="DividendsComponent.toggleHistory()">
+                        ${this.showHistory ? '🔼 Скрыть историю' : '📜 Показать историю (' + past.length + ')'}
+                    </button>
+                </div>`;
+                if (this.showHistory) {
+                    html += `<div class="div-section-label">📜 История дивидендов</div>`;
+                    html += past.map(div => this.renderItem(div)).join('');
+                }
+            }
         }
 
         if (!html) {
@@ -60,8 +96,76 @@ const DividendsComponent = {
         container.innerHTML = html;
     },
 
+    buildMonthlyData(dividends, coupons) {
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
+        const months = {};
+
+        // Process coupons
+        if (coupons) {
+            for (const c of coupons) {
+                const d = new Date(c.coupon_date);
+                if (d < now) continue;
+                const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+                if (!months[key]) {
+                    months[key] = { date: d, total: 0, items: [] };
+                }
+                months[key].total += c.total_expected || 0;
+                months[key].items.push(c);
+            }
+        }
+
+        // Process dividends
+        if (dividends) {
+            for (const d of dividends) {
+                const dt = new Date(d.registry_close_date);
+                if (dt < now) continue;
+                const key = dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0');
+                if (!months[key]) {
+                    months[key] = { date: dt, total: 0, items: [] };
+                }
+                months[key].total += d.total_expected || 0;
+                months[key].items.push(d);
+            }
+        }
+
+        return Object.values(months).sort((a, b) => a.date - b.date);
+    },
+
+    renderHistogram(monthlyData) {
+        if (!monthlyData || monthlyData.length === 0) {
+            return '<div class="loading">Нет предстоящих выплат</div>';
+        }
+
+        const maxTotal = Math.max(...monthlyData.map(m => m.total));
+        const monthNames = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+
+        let html = '<div class="histogram-container">';
+
+        for (const m of monthlyData) {
+            const heightPct = maxTotal > 0 ? (m.total / maxTotal * 100) : 0;
+            const monthLabel = monthNames[m.date.getMonth()];
+            const yearLabel = m.date.getFullYear();
+            const isCurrentMonth = new Date().getMonth() === m.date.getMonth() && new Date().getFullYear() === m.date.getFullYear();
+
+            html += `<div class="histogram-bar-wrapper">
+                <div class="histogram-value">${Utils.formatCurrency(m.total)}</div>
+                <div class="histogram-bar ${isCurrentMonth ? 'current' : ''}" style="height:${Math.max(heightPct, 5)}%">
+                    <div class="histogram-tooltip">${m.items.map(i => `${i.ticker || i.name}: ${Utils.formatCurrency(i.total_expected || 0)}`).join('<br>')}</div>
+                </div>
+                <div class="histogram-label">${monthLabel}<br>${yearLabel}</div>
+            </div>`;
+        }
+
+        html += '</div>';
+        return html;
+    },
+
     renderCouponItem(coup) {
         const total = coup.total_expected || 0;
+        const now = new Date();
+        const coupDate = new Date(coup.coupon_date);
+        if (coupDate < now) return '';
         return `<div class="div-item">
             <div class="div-info">
                 <span class="ticker">${coup.ticker}</span>
