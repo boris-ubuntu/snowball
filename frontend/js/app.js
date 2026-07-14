@@ -1,5 +1,6 @@
 const App = {
     portfolioId: null,
+    dashboardData: null,  // Кеш для данных главной страницы
 
     async init() {
         // Set current date
@@ -102,7 +103,7 @@ const App = {
             this.closeAddSecurityModal();
 
             // Reload securities list and modal
-            await SecuritiesManager.load();
+            await SecuritiesManager.load(this.portfolioId);
             if (typeof ModalComponent !== 'undefined' && ModalComponent.loadSecurities) {
                 await ModalComponent.loadSecurities();
             }
@@ -111,20 +112,32 @@ const App = {
         }
     },
 
-    async loadDashboard() {
+    async loadDashboard(forceRefresh = false) {
         if (!this.portfolioId) return;
+
+        // Если есть кеш и не требуется принудительное обновление - используем его
+        if (this.dashboardData && !forceRefresh) {
+            console.log('📊 Используем кешированные данные дашборда');
+            this.renderDashboard(this.dashboardData);
+            return;
+        }
 
         try {
             const data = await API.getDashboard(this.portfolioId);
-
-            // Render all components
-            SummaryComponent.render(data);
-            ChartComponent.render(data);
-            PositionsComponent.render(data);
+            // Сохраняем в кеш
+            this.dashboardData = data;
+            this.renderDashboard(data);
         } catch (e) {
             console.error('Failed to load dashboard:', e);
             this.showError('Ошибка загрузки данных. Проверьте подключение к серверу.');
         }
+    },
+
+    renderDashboard(data) {
+        // Render all components
+        SummaryComponent.render(data);
+        ChartComponent.render(data);
+        PositionsComponent.render(data);
     },
 
     async refreshPrices() {
@@ -135,13 +148,20 @@ const App = {
         try {
             const result = await API.refreshPrices();
             console.log(`Prices refreshed: ${result.updated}`);
-            await this.loadDashboard();
+            // Принудительно обновляем данные
+            await this.loadDashboard(true);
         } catch (e) {
             console.error('Failed to refresh prices:', e);
         } finally {
             btn.textContent = '🔄';
             btn.disabled = false;
         }
+    },
+
+    // Метод для сброса кеша при добавлении новой сделки
+    async refreshDashboard() {
+        this.dashboardData = null;
+        await this.loadDashboard(true);
     },
 
     showError(msg) {

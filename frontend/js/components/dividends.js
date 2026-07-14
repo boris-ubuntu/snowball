@@ -5,18 +5,34 @@ const DividendsComponent = {
     async load(portfolioId) {
         this.portfolioId = portfolioId || this.portfolioId;
         const container = document.getElementById('dividends-list');
-        container.innerHTML = '<div class="loading">Загрузка данных с MOEX...</div>';
+        container.innerHTML = '<div class="loading">Загрузка данных...</div>';
 
         if (!this.portfolioId) return;
 
         try {
             const [dividends, coupons] = await Promise.all([
-                API.getPortfolioDividends(this.portfolioId, true),
-                API.getPortfolioCoupons(this.portfolioId, true),
+                API.getPortfolioDividends(this.portfolioId, true, false),
+                API.getPortfolioCoupons(this.portfolioId, true, false),
             ]);
-            this.render(dividends, coupons);
+            
+            console.log('📊 Данные из кеша:', {
+                dividends: dividends?.length || 0,
+                coupons: coupons?.length || 0
+            });
+            
+            if ((!dividends || dividends.length === 0) && (!coupons || coupons.length === 0)) {
+                container.innerHTML = '<div class="loading">Загрузка данных с MOEX...</div>';
+                const [dividendsFresh, couponsFresh] = await Promise.all([
+                    API.getPortfolioDividends(this.portfolioId, true, true),
+                    API.getPortfolioCoupons(this.portfolioId, true, true),
+                ]);
+                this.render(dividendsFresh, couponsFresh);
+            } else {
+                this.render(dividends, coupons);
+            }
         } catch (e) {
             container.innerHTML = '<div class="loading">⚠️ Ошибка загрузки</div>';
+            console.error(e);
         }
     },
 
@@ -42,56 +58,38 @@ const DividendsComponent = {
 
         let html = '';
 
-        // Process Accruals Button
         html += `<div class="div-actions" style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;">
             <button class="btn-primary" onclick="DividendsComponent.processAccruals()">💰 Начислить прошедшие дивиденды/купоны</button>
         </div>`;
 
-        // Monthly histogram chart
         const monthlyData = this.buildMonthlyData(dividends, coupons);
-        html += `<div class="div-section-label">📊 Будущие выплаты по месяцам</div>`;
-        html += `<div class="div-histogram">`;
-        html += this.renderHistogram(monthlyData);
+        const totalNext12Months = monthlyData.reduce((sum, m) => sum + m.total, 0);
+        const avgPerMonth = monthlyData.length > 0 ? totalNext12Months / monthlyData.length : 0;
+        const monthsWithIncome = monthlyData.filter(m => m.total > 0).length;
+
+        html += `<div class="stats-cards" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px;">`;
+        
+        html += `<div class="summary-card" style="background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; border-left: 3px solid var(--accent);">
+            <div class="card-label" style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">💰 За следующие 12 месяцев</div>
+            <div class="card-value" style="font-size: 1.3rem; font-weight: 700; color: var(--green);">${Utils.formatCurrency(totalNext12Months)}</div>
+        </div>`;
+
+        html += `<div class="summary-card" style="background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; border-left: 3px solid var(--accent-light);">
+            <div class="card-label" style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">📅 В среднем за месяц</div>
+            <div class="card-value" style="font-size: 1.3rem; font-weight: 700; color: var(--text-primary);">${Utils.formatCurrency(avgPerMonth)}</div>
+        </div>`;
+
+        html += `<div class="summary-card" style="background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; border-left: 3px solid #a855f7;">
+            <div class="card-label" style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">📊 Месяцев с выплатами</div>
+            <div class="card-value" style="font-size: 1.3rem; font-weight: 700; color: var(--text-primary);">${monthsWithIncome} / 12</div>
+        </div>`;
+
         html += `</div>`;
 
-        // Upcoming Coupons list
-        if (coupons && coupons.length > 0) {
-            const now = new Date();
-            const upcomingCoups = coupons.filter(c => new Date(c.coupon_date) >= now);
-            if (upcomingCoups.length > 0) {
-                html += `<div class="div-section-label">💰 Предстоящие купоны (ОФЗ/облигации)</div>`;
-                html += upcomingCoups.map(coup => this.renderCouponItem(coup)).join('');
-            }
-        }
-
-        // Dividends - upcoming only by default, with toggle for history
-        if (dividends && dividends.length > 0) {
-            const now = new Date();
-            const upcoming = dividends.filter(d => new Date(d.registry_close_date) >= now);
-            const past = dividends.filter(d => new Date(d.registry_close_date) < now);
-
-            if (upcoming.length > 0) {
-                html += `<div class="div-section-label">💵 Предстоящие дивиденды</div>`;
-                html += upcoming.map(div => this.renderItem(div)).join('');
-            }
-
-            // History toggle
-            if (past.length > 0) {
-                html += `<div style="text-align:center;padding:12px;">
-                    <button class="btn-secondary" onclick="DividendsComponent.toggleHistory()">
-                        ${this.showHistory ? '🔼 Скрыть историю' : '📜 Показать историю (' + past.length + ')'}
-                    </button>
-                </div>`;
-                if (this.showHistory) {
-                    html += `<div class="div-section-label">📜 История дивидендов</div>`;
-                    html += past.map(div => this.renderItem(div)).join('');
-                }
-            }
-        }
-
-        if (!html) {
-            html = '<div class="loading">Нет данных</div>';
-        }
+        html += `<div class="div-section-label">📊 Будущие выплаты по месяцам (следующие 12 месяцев)</div>`;
+        html += `<div class="div-histogram" style="height: 300px; padding: 16px 8px; overflow-x: auto;">`;
+        html += this.renderHistogram(monthlyData);
+        html += `</div>`;
 
         container.innerHTML = html;
     },
@@ -99,13 +97,16 @@ const DividendsComponent = {
     buildMonthlyData(dividends, coupons) {
         const now = new Date();
         now.setHours(0, 0, 0, 0);
+        
+        const oneYearFromNow = new Date(now);
+        oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
+        
         const months = {};
 
-        // Process coupons
         if (coupons) {
             for (const c of coupons) {
                 const d = new Date(c.coupon_date);
-                if (d < now) continue;
+                if (d < now || d > oneYearFromNow) continue;
                 const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
                 if (!months[key]) {
                     months[key] = { date: d, total: 0, items: [] };
@@ -115,11 +116,10 @@ const DividendsComponent = {
             }
         }
 
-        // Process dividends
         if (dividends) {
             for (const d of dividends) {
                 const dt = new Date(d.registry_close_date);
-                if (dt < now) continue;
+                if (dt < now || dt > oneYearFromNow) continue;
                 const key = dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0');
                 if (!months[key]) {
                     months[key] = { date: dt, total: 0, items: [] };
@@ -129,7 +129,27 @@ const DividendsComponent = {
             }
         }
 
-        return Object.values(months).sort((a, b) => a.date - b.date);
+        const result = [];
+        const currentDate = new Date(now);
+        
+        for (let i = 0; i < 12; i++) {
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            const key = year + '-' + String(month + 1).padStart(2, '0');
+            
+            if (months[key]) {
+                result.push(months[key]);
+            } else {
+                result.push({
+                    date: new Date(year, month, 1),
+                    total: 0,
+                    items: []
+                });
+            }
+            currentDate.setMonth(currentDate.getMonth() + 1);
+        }
+
+        return result;
     },
 
     renderHistogram(monthlyData) {
@@ -137,103 +157,46 @@ const DividendsComponent = {
             return '<div class="loading">Нет предстоящих выплат</div>';
         }
 
-        const maxTotal = Math.max(...monthlyData.map(m => m.total));
-        const monthNames = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+        // Находим максимальную сумму для масштабирования
+        const maxTotal = Math.max(...monthlyData.map(m => m.total), 0);
+        
+        if (maxTotal === 0) {
+            return '<div class="loading">Нет предстоящих выплат в следующие 12 месяцев</div>';
+        }
 
-        let html = '<div class="histogram-container">';
+        const monthNames = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+        const now = new Date();
+
+        // ✅ Контейнер с фиксированной высотой 100% от родителя
+        let html = '<div class="histogram-container" style="display: flex; align-items: flex-end; justify-content: space-around; gap: 8px; height: 100%; min-height: 250px; padding: 10px 0;">';
 
         for (const m of monthlyData) {
-            const heightPct = maxTotal > 0 ? (m.total / maxTotal * 100) : 0;
+            // ✅ Высота в процентах от максимальной суммы (максимум = 100% высоты контейнера)
+            const heightPct = maxTotal > 0 ? (m.total / maxTotal) * 100 : 0;
             const monthLabel = monthNames[m.date.getMonth()];
             const yearLabel = m.date.getFullYear();
-            const isCurrentMonth = new Date().getMonth() === m.date.getMonth() && new Date().getFullYear() === m.date.getFullYear();
+            const isCurrentMonth = now.getMonth() === m.date.getMonth() && now.getFullYear() === m.date.getFullYear();
 
-            html += `<div class="histogram-bar-wrapper">
-                <div class="histogram-value">${Utils.formatCurrency(m.total)}</div>
-                <div class="histogram-bar ${isCurrentMonth ? 'current' : ''}" style="height:${Math.max(heightPct, 5)}%">
-                    <div class="histogram-tooltip">${m.items.map(i => `${i.ticker || i.name}: ${Utils.formatCurrency(i.total_expected || 0)}`).join('<br>')}</div>
+            const hasItems = m.items && m.items.length > 0;
+            const tooltipContent = hasItems 
+                ? m.items.map(i => `${i.ticker || i.name}: ${Utils.formatCurrency(i.total_expected || 0)}`).join('<br>')
+                : 'Нет выплат';
+
+            // ✅ Столбец занимает всю доступную высоту, масштабируется пропорционально
+            // Минимальная видимая высота для столбцов с выплатами - 10px
+            const barHeight = Math.max(heightPct, m.total > 0 ? 10 : 2);
+
+            html += `<div class="histogram-bar-wrapper" style="display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 35px; height: 100%; justify-content: flex-end; position: relative;">
+                <div class="histogram-value" style="font-size: 0.65rem; font-weight: 700; color: var(--green); margin-bottom: 3px; white-space: nowrap; text-align: center;">${m.total > 0 ? Utils.formatCurrency(m.total) : '0'}</div>
+                <div class="histogram-bar ${isCurrentMonth ? 'current' : ''} ${!hasItems ? 'empty' : ''}" 
+                     style="width: 100%; max-width: 40px; min-height: ${m.total > 0 ? '6px' : '3px'}; height: ${barHeight}%; background: ${hasItems ? 'linear-gradient(180deg, var(--accent-light), var(--accent))' : 'var(--bg-hover)'}; border-radius: 4px 4px 0 0; cursor: default; position: relative; transition: all 0.3s ease; opacity: ${hasItems ? 1 : 0.25};">
+                    ${hasItems ? `<div class="histogram-tooltip" style="display: none; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 0.7rem; white-space: nowrap; z-index: 10; color: var(--text-primary); margin-bottom: 4px;">${tooltipContent}</div>` : ''}
                 </div>
-                <div class="histogram-label">${monthLabel}<br>${yearLabel}</div>
+                <div class="histogram-label" style="font-size: 0.6rem; color: var(--text-muted); text-align: center; margin-top: 4px; line-height: 1.2;">${monthLabel}<br>${yearLabel}</div>
             </div>`;
         }
 
         html += '</div>';
         return html;
-    },
-
-    renderCouponItem(coup) {
-        const total = coup.total_expected || 0;
-        const now = new Date();
-        const coupDate = new Date(coup.coupon_date);
-        if (coupDate < now) return '';
-        return `<div class="div-item">
-            <div class="div-info">
-                <span class="ticker">${coup.ticker}</span>
-                <span class="div-name">${coup.name}</span>
-            </div>
-            <div class="div-details">
-                <div class="div-detail-row">
-                    <span class="detail-label">Дата купона</span>
-                    <span class="detail-value">${Utils.formatDate(coup.coupon_date)}</span>
-                </div>
-                <div class="div-detail-row">
-                    <span class="detail-label">На облигацию</span>
-                    <span class="detail-value">${Utils.formatCurrency(coup.value_per_bond)}</span>
-                </div>
-                <div class="div-detail-row">
-                    <span class="detail-label">Кол-во</span>
-                    <span class="detail-value">${coup.quantity} шт</span>
-                </div>
-                <div class="div-detail-row">
-                    <span class="detail-label">Итого</span>
-                    <span class="detail-value positive">${Utils.formatCurrency(total)}</span>
-                </div>
-            </div>
-        </div>`;
-    },
-
-    renderItem(div) {
-        const closeDate = new Date(div.registry_close_date);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        closeDate.setHours(0, 0, 0, 0);
-        const daysUntil = Math.ceil((closeDate - today) / (1000 * 60 * 60 * 24));
-
-        const isPast = daysUntil < 0;
-        const urgencyLabel = isPast ? `${Math.abs(daysUntil)} дн. назад` :
-            daysUntil === 0 ? '🔥 Сегодня' :
-            daysUntil <= 7 ? `🔥 Через ${daysUntil} дн.` : `📅 Через ${daysUntil} дн.`;
-
-        const totalStr = div.total_expected > 0
-            ? Utils.formatCurrency(div.total_expected)
-            : '—';
-
-        return `<div class="div-item">
-            <div class="div-info">
-                <span class="ticker">${div.ticker}</span>
-                <span class="div-name">${div.name}</span>
-            </div>
-            <div class="div-details">
-                <div class="div-detail-row">
-                    <span class="detail-label">Дата закрытия реестра</span>
-                    <span class="detail-value">${Utils.formatDate(div.registry_close_date)}</span>
-                </div>
-                <div class="div-detail-row">
-                    <span class="detail-label">На акцию</span>
-                    <span class="detail-value">${Utils.formatCurrency(div.value_per_share)}</span>
-                </div>
-                <div class="div-detail-row">
-                    <span class="detail-label">Кол-во</span>
-                    <span class="detail-value">${div.quantity} шт</span>
-                </div>
-                <div class="div-detail-row">
-                    <span class="detail-label">Итого</span>
-                    <span class="detail-value positive">${totalStr}</span>
-                </div>
-                <div class="div-detail-row">
-                    <span class="urgency-badge">${urgencyLabel}</span>
-                </div>
-            </div>
-        </div>`;
     },
 };

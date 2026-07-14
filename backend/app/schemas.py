@@ -102,7 +102,7 @@ class PositionResponse(BaseModel):
 # === Transaction ===
 class TransactionBase(BaseModel):
     security_id: int
-    transaction_type: str  # buy / sell
+    transaction_type: str  # buy / sell / accrual
     quantity: float
     price: float
     commission: float = 0
@@ -174,6 +174,7 @@ class PortfolioSummary(BaseModel):
     total_return_percent: float = 0
     total_accruals: float = 0
     expected_annual_income: float = 0  # Expected dividends + coupons for next 12 months
+    expected_income_yield: float = 0  # Доходность в % от вложенных средств
     position_count: int = 0
     currency: str = "RUB"
 

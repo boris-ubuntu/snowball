@@ -16,8 +16,8 @@ const Utils = {
 
     formatPercent(value) {
         if (value == null || isNaN(value)) return '—';
-        const sign = value >= 0 ? '+' : '';
-        return `${sign}${value.toFixed(2)}%`;
+        // ✅ Убираем знак "+" для положительных значений
+        return `${value.toFixed(2)}%`;
     },
 
     formatNumber(value) {

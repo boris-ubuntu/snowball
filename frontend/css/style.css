@@ -803,3 +803,34 @@ tbody tr:last-child td { border-bottom: none; }
         font-size: 0.8rem;
     }
 }
+/* Пустые столбцы в гистограмме */
+.histogram-bar.empty {
+    background: var(--bg-hover);
+    opacity: 0.3;
+    min-height: 4px;
+}
+
+.histogram-bar.empty:hover {
+    opacity: 0.5;
+}
+/* ✅ Цвета для прибыли в таблице */
+td.positive {
+    color: var(--green);
+}
+
+td.negative {
+    color: var(--red);
+}
+/* Цвета для прибыли в таблице */
+td.positive {
+    color: var(--green);
+}
+
+td.negative {
+    color: var(--red);
+}
+
+/* Карточка доходности */
+.card-yield { 
+    border-left: 3px solid #f59e0b; 
+}

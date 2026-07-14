@@ -11,8 +11,10 @@ const ModalComponent = {
     async loadSecurities() {
         try {
             this.securities = await API.getSecurities();
+            console.log(`📊 Загружено ${this.securities.length} бумаг для поиска`);
         } catch (e) {
             console.error('Failed to load securities:', e);
+            this.securities = [];
         }
     },
 
@@ -140,8 +142,8 @@ const ModalComponent = {
             });
 
             this.close();
-            // Refresh dashboard
-            await App.loadDashboard();
+            // Обновляем дашборд с принудительной перезагрузкой
+            await App.refreshDashboard();
         } catch (e) {
             alert('Ошибка при создании сделки: ' + e.message);
         }

@@ -7,6 +7,7 @@ const SummaryComponent = {
         const totalAccrualsEl = document.getElementById('total-accruals');
         const accrualsPercentEl = document.getElementById('accruals-percent');
         const expectedIncomeEl = document.getElementById('expected-income');
+        const expectedYieldEl = document.getElementById('expected-yield');
 
         if (totalValueEl) {
             totalValueEl.textContent = Utils.formatCurrency(summary.total_value);
@@ -31,6 +32,13 @@ const SummaryComponent = {
 
         if (expectedIncomeEl) {
             expectedIncomeEl.textContent = Utils.formatCurrency(summary.expected_annual_income);
+        }
+
+        if (expectedYieldEl) {
+            const yieldText = summary.expected_income_yield > 0 
+                ? Utils.formatPercent(summary.expected_income_yield) 
+                : '—';
+            expectedYieldEl.textContent = yieldText;
         }
     },
 };

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date, DateTime, ForeignKey, Enum, Text
+from sqlalchemy import Column, Integer, String, Float, Date, DateTime, ForeignKey, Enum, Text, JSON, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.sql import func
 import enum
@@ -120,3 +120,17 @@ class PortfolioSnapshot(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     portfolio = relationship("Portfolio", back_populates="snapshots")
+
+class MoexCache(Base):
+    __tablename__ = "moex_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticker = Column(String(20), nullable=False, index=True)
+    cache_type = Column(String(20), nullable=False)  # dividends, coupons, price
+    data = Column(JSON, nullable=False)  # Храним JSON с данными
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=True)  # Время истечения кеша
+
+    __table_args__ = (
+        UniqueConstraint('ticker', 'cache_type', name='uq_moex_cache_ticker_type'),
+    )

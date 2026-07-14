@@ -74,12 +74,12 @@ const API = {
         });
     },
 
-    // Dividends
-    getPortfolioDividends(portfolioId, showAll = true) {
-        return this.request(`/portfolio/${portfolioId}/dividends?all=${showAll}`);
+    // Dividends - ИСПРАВЛЕНО
+    getPortfolioDividends(portfolioId, showAll = true, forceRefresh = false) {
+        return this.request(`/portfolio/${portfolioId}/dividends?all=${showAll}&force_refresh=${forceRefresh}`);
     },
-    getPortfolioCoupons(portfolioId, upcomingOnly = false) {
-        return this.request(`/portfolio/${portfolioId}/coupons?upcoming=${upcomingOnly}`);
+    getPortfolioCoupons(portfolioId, upcomingOnly = false, forceRefresh = false) {
+        return this.request(`/portfolio/${portfolioId}/coupons?upcoming=${upcomingOnly}&force_refresh=${forceRefresh}`);
     },
     processAccruals(portfolioId) {
         return this.request(`/portfolio/${portfolioId}/process-accruals`, { method: 'POST' });

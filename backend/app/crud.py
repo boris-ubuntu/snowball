@@ -1,8 +1,8 @@
 import logging
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, desc
+from sqlalchemy import func, desc, select
 from typing import Optional, List
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from . import models, schemas
@@ -25,27 +25,24 @@ def get_securities(db: Session, skip: int = 0, limit: int = 1000) -> List[models
 
 def get_portfolio_securities(db: Session, portfolio_id: int) -> List[schemas.PortfolioSecurityResponse]:
     """Get securities with position data for this portfolio"""
-    from sqlalchemy import union
-    # Get security IDs from positions and transactions
-    pos_ids = (
-        db.query(models.PortfolioPosition.security_id)
-        .filter(models.PortfolioPosition.portfolio_id == portfolio_id)
-        .distinct()
-    )
-    tx_ids = (
-        db.query(models.Transaction.security_id)
-        .filter(models.Transaction.portfolio_id == portfolio_id)
-        .distinct()
-    )
+    from sqlalchemy import select, union
+    
+    pos_ids = select(models.PortfolioPosition.security_id).where(
+        models.PortfolioPosition.portfolio_id == portfolio_id
+    ).distinct()
+    
+    tx_ids = select(models.Transaction.security_id).where(
+        models.Transaction.portfolio_id == portfolio_id
+    ).distinct()
+    
     all_ids = pos_ids.union(tx_ids).subquery()
     
     securities = (
         db.query(models.Security)
-        .filter(models.Security.id.in_(all_ids))
+        .filter(models.Security.id.in_(select(all_ids)))
         .all()
     )
     
-    # Get position data for each security
     positions = {
         p.security_id: p
         for p in db.query(models.PortfolioPosition)
@@ -101,7 +98,6 @@ def delete_security(db: Session, security_id: int) -> bool:
     security = get_security(db, security_id)
     if not security:
         return False
-    # Delete related records first to avoid FK issues
     db.query(models.PortfolioPosition).filter(models.PortfolioPosition.security_id == security_id).delete()
     db.query(models.Transaction).filter(models.Transaction.security_id == security_id).delete()
     db.query(models.Dividend).filter(models.Dividend.security_id == security_id).delete()
@@ -193,7 +189,6 @@ def delete_position(db: Session, position_id: int) -> bool:
 
 
 def update_position_accruals(db: Session, portfolio_id: int, security_id: int):
-    """Recalculate total_accruals for a position from all accrual transactions"""
     total = db.query(func.sum(models.Transaction.total_amount)).filter(
         models.Transaction.portfolio_id == portfolio_id,
         models.Transaction.security_id == security_id,
@@ -241,7 +236,6 @@ def get_transaction(db: Session, transaction_id: int) -> Optional[models.Transac
 
 
 def create_transaction(db: Session, portfolio_id: int, data: schemas.TransactionCreate) -> models.Transaction:
-    # Use provided total_amount for accruals, else auto-calc
     if data.total_amount is not None:
         total_amount = data.total_amount
     else:
@@ -262,7 +256,6 @@ def create_transaction(db: Session, portfolio_id: int, data: schemas.Transaction
     )
     db.add(transaction)
 
-    # Update position
     position = (
         db.query(models.PortfolioPosition)
         .filter(
@@ -274,7 +267,6 @@ def create_transaction(db: Session, portfolio_id: int, data: schemas.Transaction
 
     if data.transaction_type == "buy":
         if position:
-            # Update average price
             old_total = position.avg_price * position.quantity if position.avg_price else 0
             new_total = old_total + data.quantity * data.price + data.commission
             new_qty = position.quantity + data.quantity
@@ -294,12 +286,10 @@ def create_transaction(db: Session, portfolio_id: int, data: schemas.Transaction
             if position.quantity <= 0:
                 db.delete(position)
     elif data.transaction_type == "accrual":
-        # Начисление (дивиденд, купон) - увеличивает баланс, не меняет количество
-        accrual_amount = total_amount  # total_amount = quantity * price + commission
+        accrual_amount = total_amount
         if position:
             position.total_accruals = (position.total_accruals or 0) + accrual_amount
         else:
-            # Если нет позиции, создаём с нулевым количеством
             position = models.PortfolioPosition(
                 portfolio_id=portfolio_id,
                 security_id=data.security_id,
@@ -343,7 +333,6 @@ def create_dividend(db: Session, data: schemas.DividendCreate) -> models.Dividen
 def get_dashboard(db: Session, portfolio_id: int) -> dict:
     positions = get_positions(db, portfolio_id)
     
-    # Calculate total accruals from ALL accrual transactions (including closed positions)
     total_accruals_all = db.query(func.sum(models.Transaction.total_amount)).filter(
         models.Transaction.portfolio_id == portfolio_id,
         models.Transaction.transaction_type == "accrual",
@@ -351,6 +340,7 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
     
     total_invested = 0
     total_value = 0
+    total_invested_income_assets = 0
     position_list = []
 
     for pos in positions:
@@ -364,9 +354,16 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
         total_invested += cost
         total_value += value
         
+        if pos.security.security_type in ("stock", "bond", "ofz"):
+            total_invested_income_assets += cost
+        
         accruals = pos.total_accruals or 0
         profit = value - cost + accruals
-        profit_percent = ((current_price - (pos.avg_price or 0)) / (pos.avg_price or 1)) * 100 if pos.avg_price else 0
+        
+        if cost > 0:
+            profit_percent = ((value + accruals) / cost - 1) * 100
+        else:
+            profit_percent = 0
 
         position_list.append(schemas.DashboardPosition(
             id=pos.id,
@@ -381,32 +378,33 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
             total_accruals=round(accruals, 2),
             profit=round(profit, 2),
             profit_percent=round(profit_percent, 2),
-            share=0,  # Will calculate after total
+            share=0,
         ))
 
-    # Calculate shares
     for p in position_list:
         p.share = round((p.total_value / total_value * 100), 2) if total_value > 0 else 0
 
     total_return = total_value - total_invested + total_accruals_all
-    total_return_percent = ((total_value + total_accruals_all) / total_invested - 1) * 100 if total_invested > 0 else 0
+    
+    if total_invested > 0:
+        total_return_percent = ((total_value + total_accruals_all) / total_invested - 1) * 100
+    else:
+        total_return_percent = 0
 
-    # Calculate expected annual income from upcoming dividends and coupons
     expected_annual_income = 0
+    expected_income_yield = 0
+    
     try:
         import asyncio
         from datetime import timedelta
         from app.services.moex_dividends import get_portfolio_dividends_all
         from app.services.moex_coupons import get_portfolio_coupons
 
-        # Run async calls in a new event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            # Get all dividends
-            all_divs = loop.run_until_complete(get_portfolio_dividends_all(db, portfolio_id))
-            # Get all coupons
-            all_coups = loop.run_until_complete(get_portfolio_coupons(db, portfolio_id))
+            all_divs = loop.run_until_complete(get_portfolio_dividends_all(db, portfolio_id, force_refresh=False))
+            all_coups = loop.run_until_complete(get_portfolio_coupons(db, portfolio_id, force_refresh=False))
 
             today = date.today()
             one_year = today + timedelta(days=365)
@@ -426,6 +424,16 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
                         expected_annual_income += c.get("total_expected", 0)
                 except:
                     pass
+
+            # Рассчитываем доходность
+            invested_in_income_assets = 0
+            for pos in positions:
+                if pos.security and pos.security.security_type in ("stock", "bond", "ofz"):
+                    invested_in_income_assets += (pos.avg_price or 0) * pos.quantity
+
+            if invested_in_income_assets > 0 and expected_annual_income > 0:
+                expected_income_yield = (expected_annual_income / invested_in_income_assets) * 100
+            
         finally:
             loop.close()
     except Exception as e:
@@ -441,6 +449,7 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
             total_return_percent=round(total_return_percent, 2),
             total_accruals=round(total_accruals_all, 2),
             expected_annual_income=round(expected_annual_income, 2),
+            expected_income_yield=round(expected_income_yield, 2),
             position_count=len(position_list),
         ),
         positions=position_list,

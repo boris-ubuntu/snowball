@@ -5,17 +5,25 @@ from datetime import date, datetime
 from sqlalchemy.orm import Session
 
 from .. import models
+from .cache_service import get_cached_data, set_cached_data
 
 logger = logging.getLogger(__name__)
 
 MOEX_BASE = "https://iss.moex.com/iss"
 
 
-async def get_dividends_for_ticker(ticker: str) -> List[Dict]:
+async def get_dividends_for_ticker(db: Session, ticker: str, force_refresh: bool = False) -> List[Dict]:
     """
-    Fetch dividends for a ticker from MOEX ISS API.
-    Returns list of dicts with keys: ticker, isin, registry_close_date, value, currency
+    Fetch dividends for a ticker from MOEX ISS API with caching.
     """
+    # Пытаемся получить из кеша
+    if not force_refresh:
+        cached = get_cached_data(db, ticker, 'dividends')
+        if cached is not None:
+            logger.debug(f"Using cached dividends for {ticker}")
+            return cached
+
+    # Если нет в кеше или нужно обновить - запрашиваем из MOEX
     url = f"{MOEX_BASE}/securities/{ticker}/dividends.json"
     params = {"iss.meta": "off"}
 
@@ -28,6 +36,10 @@ async def get_dividends_for_ticker(ticker: str) -> List[Dict]:
 
             data = resp.json()
             dividends_data = data.get("dividends", {})
+            
+            if not dividends_data:
+                return []
+                
             columns = dividends_data.get("columns", [])
             rows = dividends_data.get("data", [])
 
@@ -40,46 +52,62 @@ async def get_dividends_for_ticker(ticker: str) -> List[Dict]:
                 for i, col in enumerate(columns):
                     if i < len(row):
                         entry[col.lower()] = row[i]
+                
+                registry_date = str(entry.get("registryclosedate", ""))
+                value = entry.get("value")
+                
+                if not registry_date or value is None:
+                    continue
+                    
+                try:
+                    value_float = float(value)
+                except (ValueError, TypeError):
+                    continue
+                    
+                if value_float <= 0:
+                    continue
+                    
                 result.append({
                     "ticker": entry.get("secid", ticker),
                     "isin": entry.get("isin", ""),
-                    "registry_close_date": str(entry.get("registryclosedate", "")),
-                    "value": float(entry.get("value", 0)),
+                    "registry_close_date": registry_date,
+                    "value": value_float,
                     "currency": entry.get("currencyid", "RUB"),
                 })
+
+            # Сохраняем в кеш
+            if result:
+                set_cached_data(db, ticker, 'dividends', result)
 
             return result
 
         except Exception as e:
-            logger.error(f"MOEX dividends fetch error for {ticker}: {e}")
+            logger.debug(f"MOEX dividends fetch error for {ticker}: {e}")
             return []
 
 
-async def get_portfolio_dividends(db: Session, portfolio_id: int) -> List[Dict]:
+async def get_portfolio_dividends(db: Session, portfolio_id: int, force_refresh: bool = False) -> List[Dict]:
     """
     Get upcoming dividends for all securities in a portfolio.
-    Returns dividends sorted by registry_close_date (nearest first).
-    Only includes dividends with registry_close_date >= today (upcoming).
     """
     from .. import crud
 
-    # Get securities in portfolio
     securities = crud.get_portfolio_securities(db, portfolio_id)
-
     today = date.today()
     all_dividends = []
 
     for sec in securities:
+        if getattr(sec, "quantity", 0) <= 0:
+            continue
+            
         try:
-            divs = await get_dividends_for_ticker(sec.ticker)
+            divs = await get_dividends_for_ticker(db, sec.ticker, force_refresh)
             for div in divs:
-                # Parse date
                 try:
                     close_date = datetime.strptime(div["registry_close_date"], "%Y-%m-%d").date()
                 except (ValueError, TypeError):
                     continue
 
-                # Only include upcoming dividends
                 if close_date >= today:
                     all_dividends.append({
                         "ticker": sec.ticker,
@@ -92,18 +120,16 @@ async def get_portfolio_dividends(db: Session, portfolio_id: int) -> List[Dict]:
                         "total_expected": div["value"] * getattr(sec, "quantity", 0),
                     })
         except Exception as e:
-            logger.error(f"Error fetching dividends for {sec.ticker}: {e}")
+            logger.debug(f"Error fetching dividends for {sec.ticker}: {e}")
+            continue
 
-    # Sort by registry_close_date (nearest first)
     all_dividends.sort(key=lambda x: x["registry_close_date"])
-
     return all_dividends
 
 
-async def get_portfolio_dividends_all(db: Session, portfolio_id: int) -> List[Dict]:
+async def get_portfolio_dividends_all(db: Session, portfolio_id: int, force_refresh: bool = False) -> List[Dict]:
     """
     Get ALL dividends (past and future) for all securities in a portfolio.
-    Sorted by registry_close_date descending (most recent first).
     """
     from .. import crud
 
@@ -111,8 +137,11 @@ async def get_portfolio_dividends_all(db: Session, portfolio_id: int) -> List[Di
     all_dividends = []
 
     for sec in securities:
+        if getattr(sec, "quantity", 0) <= 0:
+            continue
+            
         try:
-            divs = await get_dividends_for_ticker(sec.ticker)
+            divs = await get_dividends_for_ticker(db, sec.ticker, force_refresh)
             for div in divs:
                 try:
                     close_date = datetime.strptime(div["registry_close_date"], "%Y-%m-%d").date()
@@ -130,9 +159,8 @@ async def get_portfolio_dividends_all(db: Session, portfolio_id: int) -> List[Di
                     "total_expected": div["value"] * getattr(sec, "quantity", 0),
                 })
         except Exception as e:
-            logger.error(f"Error fetching dividends for {sec.ticker}: {e}")
+            logger.debug(f"Error fetching dividends for {sec.ticker}: {e}")
+            continue
 
-    # Sort by registry_close_date descending (most recent first)
     all_dividends.sort(key=lambda x: x["registry_close_date"], reverse=True)
-
     return all_dividends

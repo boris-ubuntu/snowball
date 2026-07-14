@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 import asyncio
 
 from .. import schemas, crud
@@ -59,6 +59,7 @@ def get_portfolio_securities(portfolio_id: int, db: Session = Depends(get_db)):
 async def portfolio_dividends(
     portfolio_id: int,
     all: bool = Query(False, description="Show all dividends including past"),
+    force_refresh: bool = Query(False, description="Force refresh from MOEX"),
     db: Session = Depends(get_db),
 ):
     """Get dividends for portfolio securities from MOEX"""
@@ -66,9 +67,9 @@ async def portfolio_dividends(
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     if all:
-        dividends = await get_portfolio_dividends_all(db, portfolio_id)
+        dividends = await get_portfolio_dividends_all(db, portfolio_id, force_refresh=force_refresh)
     else:
-        dividends = await get_portfolio_dividends(db, portfolio_id)
+        dividends = await get_portfolio_dividends(db, portfolio_id, force_refresh=force_refresh)
     return dividends
 
 
@@ -76,13 +77,14 @@ async def portfolio_dividends(
 async def portfolio_coupons(
     portfolio_id: int,
     upcoming: bool = Query(False, description="Only upcoming coupons"),
+    force_refresh: bool = Query(False, description="Force refresh from MOEX"),
     db: Session = Depends(get_db),
 ):
     """Get coupons for OFZ/bonds in portfolio"""
     portfolio = crud.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    coupons = await get_portfolio_coupons(db, portfolio_id, upcoming_only=upcoming)
+    coupons = await get_portfolio_coupons(db, portfolio_id, upcoming_only=upcoming, force_refresh=force_refresh)
     return coupons
 
 
@@ -104,6 +106,49 @@ async def refresh_prices(db: Session = Depends(get_db)):
         return {"status": "ok", "updated": updated}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to refresh prices: {str(e)}")
+
+
+@router.post("/{portfolio_id}/refresh-cache")
+async def refresh_cache(
+    portfolio_id: int,
+    cache_type: Optional[str] = Query(None, description="dividends, coupons, or all"),
+    db: Session = Depends(get_db),
+):
+    """Принудительно обновить кеш MOEX данных"""
+    from ..services.moex_dividends import get_portfolio_dividends_all
+    from ..services.moex_coupons import get_portfolio_coupons
+    from ..services.cache_service import clear_expired_cache
+    
+    portfolio = crud.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    
+    try:
+        result = {"status": "ok", "message": "", "updated": []}
+        
+        # Очищаем просроченный кеш
+        cleared = clear_expired_cache(db)
+        if cleared:
+            result["message"] += f"Cleared {cleared} expired entries. "
+        
+        # Обновляем указанные типы кеша
+        if cache_type is None or cache_type == "all" or cache_type == "dividends":
+            await get_portfolio_dividends_all(db, portfolio_id, force_refresh=True)
+            result["updated"].append("dividends")
+            result["message"] += "Dividends cache refreshed. "
+        
+        if cache_type is None or cache_type == "all" or cache_type == "coupons":
+            await get_portfolio_coupons(db, portfolio_id, force_refresh=True)
+            result["updated"].append("coupons")
+            result["message"] += "Coupons cache refreshed. "
+        
+        if not result["updated"]:
+            result["message"] = f"Unknown cache_type: {cache_type}. Use: dividends, coupons, or all"
+            result["status"] = "warning"
+        
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh cache: {str(e)}")
 
 
 # === Positions ===
