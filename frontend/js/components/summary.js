@@ -7,25 +7,43 @@ const SummaryComponent = {
         const totalAccrualsEl = document.getElementById('total-accruals');
         const accrualsPercentEl = document.getElementById('accruals-percent');
         const expectedIncomeEl = document.getElementById('expected-income');
+        const totalInvestedEl = document.getElementById('total-invested');
+        const returnSubEl = document.getElementById('return-sub');
 
+        // Стоимость
         if (totalValueEl) {
             totalValueEl.textContent = Utils.formatCurrency(summary.total_value);
         }
 
+        // Вложено
+        if (totalInvestedEl) {
+            totalInvestedEl.textContent = Utils.formatCurrency(summary.total_invested);
+        }
+
+        // Прибыль — только сумма, без процентов
         if (totalReturnEl) {
-            const returnText = `${Utils.formatCurrency(summary.total_return)} (${Utils.formatPercent(summary.total_return_percent)})`;
-            totalReturnEl.textContent = returnText;
+            totalReturnEl.textContent = Utils.formatCurrency(summary.total_return);
             totalReturnEl.className = 'card-value ' + (summary.total_return >= 0 ? 'positive' : 'negative');
         }
 
-        if (totalAccrualsEl) {
-            totalAccrualsEl.textContent = Utils.formatCurrency(summary.total_accruals);
+        // Подпись под прибылью — пассивный доход
+        if (returnSubEl) {
+            returnSubEl.textContent = 'Пассивный доход ' + Utils.formatCurrency(summary.total_accruals);
         }
 
-        if (accrualsPercentEl) {
-            const pct = summary.total_value > 0
-                ? (summary.total_accruals / summary.total_value * 100)
+        // Пассивный доход — показываем суммарную доходность с треугольником
+        if (totalAccrualsEl) {
+            const pct = summary.total_invested > 0
+                ? ((summary.total_value + summary.total_accruals) / summary.total_invested - 1) * 100
                 : 0;
+            const sign = pct >= 0 ? '' : '▼ ';
+            const colorClass = pct >= 0 ? 'positive' : 'negative';
+            totalAccrualsEl.textContent = sign + Utils.formatPercent(pct);
+            totalAccrualsEl.className = 'card-value ' + colorClass;
+        }
+
+        // Подпись под пассивным доходом
+        if (accrualsPercentEl) {
             const expectedText = summary.expected_annual_income > 0
                 ? Utils.formatCurrency(summary.expected_annual_income)
                 : '—';

@@ -63,7 +63,12 @@ header {
     color: var(--text-primary);
 }
 
-.header-left h1 span {
+.header-left h1 .logo-cat {
+    font-size: 1.6rem;
+    margin-right: 4px;
+}
+
+.header-left h1 span:not(.logo-cat) {
     background: linear-gradient(135deg, var(--accent), var(--accent-light));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;

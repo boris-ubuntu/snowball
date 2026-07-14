@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Snowball — Портфель ценных бумаг</title>
+    <title>КотоMoney — Портфель ценных бумаг</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="stylesheet" href="css/style.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -13,12 +13,12 @@
         <!-- Header -->
         <header>
             <div class="header-left">
-                <h1>❄️ <span>Snowball</span></h1>
+                <h1><span class="logo-cat">🐱</span> <span>КотоMoney</span></h1>
                 <nav class="header-nav">
-                    <button id="nav-main" class="nav-btn active">🏠 Главная</button>
-                    <button id="nav-assets" class="nav-btn">📦 Активы</button>
-                    <button id="nav-operations" class="nav-btn">📋 Операции</button>
-                    <button id="nav-dividends" class="nav-btn">💵 Дивиденды</button>
+                    <button id="nav-main" class="nav-btn active">Главная</button>
+                    <button id="nav-assets" class="nav-btn">Активы</button>
+                    <button id="nav-operations" class="nav-btn">Операции</button>
+                    <button id="nav-dividends" class="nav-btn">Дивиденды</button>
                 </nav>
             </div>
             <div class="header-right">
@@ -36,14 +36,16 @@
                         <div class="summary-card card-total">
                             <div class="card-label">💰 Стоимость</div>
                             <div class="card-value" id="total-value">—</div>
+                            <div class="card-sub">Вложено: <span id="total-invested"></span></div>
                         </div>
                         <div class="summary-card card-return">
                             <div class="card-label">📈 Прибыль</div>
                             <div class="card-value" id="total-return">—</div>
+                            <div class="card-sub" id="return-sub"></div>
                         </div>
                         <div class="summary-card card-accruals">
                             <div class="card-label">💰 Пассивный доход</div>
-                            <div class="card-value positive" id="total-accruals">0</div>
+                            <div class="card-value" id="total-accruals">0</div>
                             <div class="card-sub" id="accruals-percent">Ожидается за 12 мес: <span id="expected-income"></span></div>
                         </div>
                     </div>
@@ -52,7 +54,7 @@
                 <!-- Portfolio Composition Chart -->
                 <section id="chart-section">
                     <div class="section-header">
-                        <h3>🎯 Состав портфеля</h3>
+                        <h3>🎯 Портфель</h3>
                     </div>
                     <div class="chart-container">
                         <canvas id="composition-chart"></canvas>

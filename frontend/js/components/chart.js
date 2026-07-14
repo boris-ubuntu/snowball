@@ -16,7 +16,7 @@ const ChartComponent = {
             return;
         }
 
-        const labels = positions.map(p => p.ticker);
+        const labels = positions.map(p => p.name);
         const values = positions.map(p => p.total_value);
         const colors = [
             '#3b82f6', '#22c55e', '#a78bfa', '#f59e0b', '#ef4444',
@@ -31,7 +31,7 @@ const ChartComponent = {
                     data: values,
                     backgroundColor: colors.slice(0, labels.length),
                     borderWidth: 2,
-                    borderColor: '#1e293b',
+                    borderColor: '#32323e',
                 }],
             },
             options: {
@@ -45,6 +45,7 @@ const ChartComponent = {
                             padding: 12,
                             font: { size: 12 },
                             usePointStyle: true,
+                            pointStyle: 'circle',
                             pointStyleWidth: 10,
                         },
                     },
