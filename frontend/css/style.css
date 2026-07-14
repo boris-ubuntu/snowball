@@ -145,6 +145,14 @@ header {
 
 .card-total { border-left: 3px solid var(--accent); }
 .card-return { border-left: 3px solid var(--green); }
+.card-accruals { border-left: 3px solid var(--accent-light); }
+.card-expected { border-left: 3px solid #a855f7; }
+
+.card-sub {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
 
 .card-label {
     font-size: 0.8rem;

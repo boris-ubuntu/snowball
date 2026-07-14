@@ -1,3 +1,4 @@
+import logging
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, desc
 from typing import Optional, List
@@ -5,6 +6,8 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from . import models, schemas
+
+logger = logging.getLogger(__name__)
 
 
 # === Securities ===
@@ -388,6 +391,46 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
     total_return = total_value - total_invested + total_accruals_all
     total_return_percent = ((total_value + total_accruals_all) / total_invested - 1) * 100 if total_invested > 0 else 0
 
+    # Calculate expected annual income from upcoming dividends and coupons
+    expected_annual_income = 0
+    try:
+        import asyncio
+        from datetime import timedelta
+        from app.services.moex_dividends import get_portfolio_dividends_all
+        from app.services.moex_coupons import get_portfolio_coupons
+
+        # Run async calls in a new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            # Get all dividends
+            all_divs = loop.run_until_complete(get_portfolio_dividends_all(db, portfolio_id))
+            # Get all coupons
+            all_coups = loop.run_until_complete(get_portfolio_coupons(db, portfolio_id))
+
+            today = date.today()
+            one_year = today + timedelta(days=365)
+
+            for d in all_divs:
+                try:
+                    d_date = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
+                    if today <= d_date <= one_year:
+                        expected_annual_income += d.get("total_expected", 0)
+                except:
+                    pass
+
+            for c in all_coups:
+                try:
+                    c_date = datetime.strptime(c["coupon_date"], "%Y-%m-%d").date()
+                    if today <= c_date <= one_year:
+                        expected_annual_income += c.get("total_expected", 0)
+                except:
+                    pass
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.error(f"Error calculating expected annual income: {e}")
+
     recent_txns = get_transactions(db, portfolio_id, limit=10)
 
     return schemas.DashboardResponse(
@@ -397,6 +440,7 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
             total_return=round(total_return, 2),
             total_return_percent=round(total_return_percent, 2),
             total_accruals=round(total_accruals_all, 2),
+            expected_annual_income=round(expected_annual_income, 2),
             position_count=len(position_list),
         ),
         positions=position_list,

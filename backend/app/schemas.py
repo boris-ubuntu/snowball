@@ -173,6 +173,7 @@ class PortfolioSummary(BaseModel):
     total_return: float = 0
     total_return_percent: float = 0
     total_accruals: float = 0
+    expected_annual_income: float = 0  # Expected dividends + coupons for next 12 months
     position_count: int = 0
     currency: str = "RUB"
 
