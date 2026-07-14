@@ -181,6 +181,7 @@ class PortfolioSummary(BaseModel):
 
 class DashboardPosition(BaseModel):
     id: int
+    security_id: int = 0
     ticker: str
     name: str
     security_type: str

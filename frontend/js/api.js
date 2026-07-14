@@ -85,6 +85,11 @@ const API = {
         return this.request(`/portfolio/${portfolioId}/process-accruals`, { method: 'POST' });
     },
 
+    // Delete transaction
+    deleteTransaction(portfolioId, transactionId) {
+        return this.request(`/portfolio/${portfolioId}/transactions/${transactionId}`, { method: 'DELETE' });
+    },
+
     // Prices
     refreshPrices() {
         return this.request('/portfolio/refresh-prices', { method: 'POST' });

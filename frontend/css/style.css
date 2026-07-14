@@ -870,3 +870,19 @@ td.positive {
 td.negative {
     color: var(--red);
 }
+
+/* Context menu for positions */
+.pos-context-menu {
+    position: fixed;
+    z-index: 1001;
+    min-width: 200px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px 0;
+    box-shadow: var(--shadow);
+}
+
+.pos-context-menu button:hover {
+    background: var(--bg-hover);
+}

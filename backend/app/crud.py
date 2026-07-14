@@ -382,6 +382,7 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
 
         position_list.append(schemas.DashboardPosition(
             id=pos.id,
+            security_id=pos.security.id,
             ticker=pos.security.ticker,
             name=pos.security.name,
             security_type=pos.security.security_type,

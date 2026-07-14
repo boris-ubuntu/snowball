@@ -101,18 +101,8 @@
 
             <!-- ===== ASSETS PAGE ===== -->
             <div id="page-assets" class="hidden">
-                <section id="assets-section">
-                    <div class="section-header">
-                        <h3>📦 Список активов</h3>
-                        <button id="add-security-btn" class="btn-primary">+ Добавить</button>
-                    </div>
-                    <div id="securities-list" class="securities-list">
-                        <div class="loading">Загрузка...</div>
-                    </div>
-                </section>
-
                 <!-- Positions Table on Assets page -->
-                <section id="positions-section" style="margin-top: 20px;">
+                <section id="positions-section">
                     <div class="section-header">
                         <h3>Текущие позиции</h3>
                         <button id="add-transaction-btn" class="btn-round-add">+</button>
@@ -125,7 +115,7 @@
                                     <th>Тип</th>
                                     <th>Кол-во</th>
                                     <th>Средняя</th>
-                                    <th>Цена MOEX</th>
+                                    <th>Цена</th>
                                     <th>Стоимость</th>
                                     <th>Доля</th>
                                     <th>Прибыль</th>
@@ -137,6 +127,9 @@
                         </table>
                     </div>
                 </section>
+
+                <!-- Hidden security list container (used by modal for data) -->
+                <div id="securities-list" class="hidden"></div>
             </div>
         </main>
     </div>
