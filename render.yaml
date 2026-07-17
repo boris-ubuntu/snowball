@@ -6,8 +6,6 @@ services:
     name: snowball
     env: docker
     repo: https://github.com/boris-ubuntu/snowball
-    dockerfilePath: ./backend/Dockerfile
-    dockerContext: .
     envVars:
       - key: DATABASE_URL
         sync: false
