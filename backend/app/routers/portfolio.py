@@ -115,25 +115,29 @@ async def portfolio_dividends(
     force_refresh: bool = Query(False, description="Force refresh from MOEX"),
     db: Session = Depends(get_db),
 ):
-    """Get dividends for portfolio securities - cache only, no MOEX API calls.
-    MOEX data is fetched by background refresh tasks."""
+    """Get dividends for portfolio securities.
+    Returns cached data instantly if available.
+    If no cache, fetches from MOEX with short timeout (2s) and returns.
+    Background refresh will update cache later."""
     portfolio = crud.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    # Only return cached data - never block on MOEX API
+    
     from ..services.cache_service import get_cached_data
     from .. import crud as _crud
     
     securities = _crud.get_portfolio_securities(db, portfolio_id)
     today = date.today()
     result = []
+    need_fetch = False
     
     for sec in securities:
         if sec.quantity <= 0:
             continue
         cached = get_cached_data(db, sec.ticker, 'dividends')
         if cached is None:
-            continue  # No cache yet - background will fill it
+            need_fetch = True
+            continue
         for div in cached:
             try:
                 close_date = datetime.strptime(div["registry_close_date"], "%Y-%m-%d").date()
@@ -151,6 +155,21 @@ async def portfolio_dividends(
             except:
                 pass
     
+    # If no cache at all, do a quick MOEX fetch (short timeout) to get initial data
+    if need_fetch and not result:
+        try:
+            from ..services.moex_dividends import get_portfolio_dividends_all
+            api_divs = await get_portfolio_dividends_all(db, portfolio_id, force_refresh=True)
+            for d in api_divs:
+                try:
+                    close_date = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
+                    if all or close_date >= today:
+                        result.append(d)
+                except:
+                    pass
+        except Exception as e:
+            logger.debug(f"Quick MOEX dividends fetch failed: {e}")
+    
     result.sort(key=lambda x: x["registry_close_date"], reverse=True)
     return result
 
@@ -162,23 +181,28 @@ async def portfolio_coupons(
     force_refresh: bool = Query(False, description="Force refresh from MOEX"),
     db: Session = Depends(get_db),
 ):
-    """Get coupons for OFZ/bonds in portfolio - cache only, no MOEX API calls."""
+    """Get coupons for OFZ/bonds in portfolio.
+    Returns cached data instantly if available.
+    If no cache, fetches from MOEX with short timeout (2s) and returns."""
     portfolio = crud.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
+    
     from ..services.cache_service import get_cached_data
     from .. import crud as _crud
     
     securities = _crud.get_portfolio_securities(db, portfolio_id)
     today = date.today()
     result = []
+    need_fetch = False
     
     for sec in securities:
         if sec.security_type not in ("bond", "ofz") or sec.quantity <= 0:
             continue
         cached = get_cached_data(db, sec.ticker, 'coupons')
         if cached is None:
-            continue  # No cache yet - background will fill it
+            need_fetch = True
+            continue
         for coup in cached:
             try:
                 cd_str = coup["coupon_date"]
@@ -203,6 +227,15 @@ async def portfolio_coupons(
                 })
             except:
                 pass
+    
+    # If no cache at all, do a quick MOEX fetch (short timeout) to get initial data
+    if need_fetch and not result:
+        try:
+            from ..services.moex_coupons import get_portfolio_coupons
+            api_coups = await get_portfolio_coupons(db, portfolio_id, upcoming_only=upcoming, force_refresh=True)
+            result = api_coups
+        except Exception as e:
+            logger.debug(f"Quick MOEX coupons fetch failed: {e}")
     
     result.sort(key=lambda x: x["coupon_date"], reverse=True)
     return result
