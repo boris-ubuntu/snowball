@@ -9,46 +9,67 @@ const DividendsHistogram = {
 
         if (!container || !this.portfolioId) return;
 
-        // Try to use cached data from dashboard first (instant display)
-        if (typeof App !== 'undefined' && App.dashboardData && App.dashboardData.portfolio) {
-            const expectedIncome = App.dashboardData.portfolio.expected_annual_income || 0;
-            const expectedYield = App.dashboardData.portfolio.expected_income_yield || 0;
+        // Use dashboard cached data immediately (instant display)
+        const hasCache = typeof App !== 'undefined' && App.dashboardData && App.dashboardData.portfolio;
+        const initialIncome = hasCache ? (App.dashboardData.portfolio.expected_annual_income || 0) : 0;
+        const initialYield = hasCache ? (App.dashboardData.portfolio.expected_income_yield || 0) : 0;
+        
+        if (hasCache && initialIncome > 0) {
+            // Show cached data immediately - build a simple histogram from dashboard data
             if (totalEl) {
-                totalEl.textContent = expectedIncome > 0 ? Utils.formatCurrency(expectedIncome) : '—';
+                totalEl.textContent = Utils.formatCurrency(initialIncome);
             }
-            container.innerHTML = '<div class="loading" style="color: var(--text-muted); font-size: 0.7rem;">Обновление...</div>';
-            this.updatePassiveIncomeCard(expectedIncome, null, this.portfolioId);
+            // Update passive income card from dashboard data
+            this.updatePassiveIncomeCard(initialIncome, null, this.portfolioId);
+            container.innerHTML = this.renderSimpleHistogram(initialIncome, App.dashboardData.portfolio);
+            // Don't return - try to refresh in background
         } else {
             container.innerHTML = '<div class="loading">Загрузка...</div>';
         }
 
-        // Fetch fresh data in background (non-blocking for UI)
+        // Fetch fresh data in background (non-blocking for UI) - this populates the cache
         try {
             const [dividends, coupons, lqdtProjection] = await Promise.all([
-                API.getPortfolioDividends(this.portfolioId, true, false),
-                API.getPortfolioCoupons(this.portfolioId, true, false),
+                API.getPortfolioDividends(this.portfolioId, true, false).catch(() => []),
+                API.getPortfolioCoupons(this.portfolioId, true, false).catch(() => []),
                 API.getLqdtProjection(this.portfolioId).catch(() => []),
             ]);
 
+            // Build monthly data from all sources
             const monthlyData = this.buildMonthlyData(dividends, coupons, lqdtProjection);
             this.lastMonthlyData = monthlyData;
             const totalNext12Months = monthlyData.reduce((sum, m) => sum + m.total, 0);
 
-            if (totalEl) {
+            // Update UI elements
+            if (totalEl && totalNext12Months > 0) {
                 totalEl.textContent = Utils.formatCurrency(totalNext12Months);
             }
 
             container.innerHTML = this.renderHistogram(monthlyData);
 
-            // Update the passive income card with the same total as the histogram
-            this.updatePassiveIncomeCard(totalNext12Months, monthlyData, this.portfolioId);
+            // Update the passive income card - but only if we have real data
+            if (totalNext12Months > 0) {
+                this.updatePassiveIncomeCard(totalNext12Months, monthlyData, this.portfolioId);
+            }
         } catch (e) {
             // Don't show error if we already have cached data displayed
             if (container.querySelector('.loading')) {
                 container.innerHTML = '<div class="loading">⚠️ Ошибка обновления. Используются кешированные данные.</div>';
             }
-            console.error(e);
+            console.error('Histogram refresh error:', e);
         }
+    },
+
+    renderSimpleHistogram(total, dashboardPortfolio) {
+        // Simple histogram showing just the total without breakdown by month
+        return `<div class="histogram-container" style="display: flex; align-items: flex-end; justify-content: center; gap: 1px; height: 100%; min-height: 150px; padding: 4px 0; width: 100%;">
+            <div style="display: flex; flex-direction: column; align-items: center; width: 60%; height: 100%; justify-content: flex-end;">
+                <div class="histogram-value" style="font-size: 0.55rem; font-weight: 600; color: #4ade80; opacity: 0.8; margin-bottom: 6px; text-align: center; line-height: 1.1;">${this.formatInt(total)}</div>
+                <div style="width: 100%; height: 40%; background: linear-gradient(180deg, var(--accent-light), var(--accent)); border-radius: 3px 3px 0 0; opacity: 0.5; position: relative;">
+                </div>
+                <div style="font-size: 0.55rem; color: var(--text-muted); text-align: center; margin-top: 3px; line-height: 1.1;">Кеш<br>данные</div>
+            </div>
+        </div>`;
     },
 
     updatePassiveIncomeCard(totalNext12Months, monthlyData, portfolioId) {

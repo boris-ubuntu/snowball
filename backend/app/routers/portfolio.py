@@ -115,20 +115,44 @@ async def portfolio_dividends(
     force_refresh: bool = Query(False, description="Force refresh from MOEX"),
     db: Session = Depends(get_db),
 ):
-    """Get dividends for portfolio securities from MOEX + dohod.ru (cache-first, with auto-refresh)"""
+    """Get dividends for portfolio securities - cache only, no MOEX API calls.
+    MOEX data is fetched by background refresh tasks."""
     portfolio = crud.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    # Автоматически начисляем прошедшие выплаты (дата закрытия реестра уже прошла
-    # и бумага на тот момент находилась в портфеле) — они появятся в Операциях.
-    await _auto_accrue(db, portfolio_id)
+    # Only return cached data - never block on MOEX API
+    from ..services.cache_service import get_cached_data
+    from .. import crud as _crud
     
-    # Use the proper API functions that handle caching (MOEX + dohod.ru merged)
-    if all:
-        dividends = await get_portfolio_dividends_all(db, portfolio_id, force_refresh=force_refresh)
-    else:
-        dividends = await get_portfolio_dividends(db, portfolio_id, force_refresh=force_refresh)
-    return dividends
+    securities = _crud.get_portfolio_securities(db, portfolio_id)
+    today = date.today()
+    result = []
+    
+    for sec in securities:
+        if sec.quantity <= 0:
+            continue
+        cached = get_cached_data(db, sec.ticker, 'dividends')
+        if cached is None:
+            continue  # No cache yet - background will fill it
+        for div in cached:
+            try:
+                close_date = datetime.strptime(div["registry_close_date"], "%Y-%m-%d").date()
+                if all or close_date >= today:
+                    result.append({
+                        "ticker": sec.ticker,
+                        "name": sec.name,
+                        "isin": div.get("isin", ""),
+                        "registry_close_date": div["registry_close_date"],
+                        "value_per_share": div["value"],
+                        "currency": div.get("currency", "RUB"),
+                        "quantity": sec.quantity,
+                        "total_expected": div["value"] * sec.quantity,
+                    })
+            except:
+                pass
+    
+    result.sort(key=lambda x: x["registry_close_date"], reverse=True)
+    return result
 
 
 @router.get("/{portfolio_id}/coupons")
@@ -138,12 +162,50 @@ async def portfolio_coupons(
     force_refresh: bool = Query(False, description="Force refresh from MOEX"),
     db: Session = Depends(get_db),
 ):
-    """Get coupons for OFZ/bonds in portfolio"""
+    """Get coupons for OFZ/bonds in portfolio - cache only, no MOEX API calls."""
     portfolio = crud.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    coupons = await get_portfolio_coupons(db, portfolio_id, upcoming_only=upcoming, force_refresh=force_refresh)
-    return coupons
+    from ..services.cache_service import get_cached_data
+    from .. import crud as _crud
+    
+    securities = _crud.get_portfolio_securities(db, portfolio_id)
+    today = date.today()
+    result = []
+    
+    for sec in securities:
+        if sec.security_type not in ("bond", "ofz") or sec.quantity <= 0:
+            continue
+        cached = get_cached_data(db, sec.ticker, 'coupons')
+        if cached is None:
+            continue  # No cache yet - background will fill it
+        for coup in cached:
+            try:
+                cd_str = coup["coupon_date"]
+                if isinstance(cd_str, datetime):
+                    cd_str = cd_str.strftime("%Y-%m-%d")
+                coup_date = datetime.strptime(cd_str, "%Y-%m-%d").date()
+                if upcoming and coup_date < today:
+                    continue
+                value_per_bond = coup.get("value_rub", coup.get("value", 0))
+                if value_per_bond == 0:
+                    continue
+                result.append({
+                    "ticker": sec.ticker,
+                    "name": sec.name,
+                    "isin": coup.get("isin", ""),
+                    "coupon_date": cd_str,
+                    "record_date": str(coup.get("record_date", "")),
+                    "value_per_bond": value_per_bond,
+                    "facevalue": coup.get("facevalue", 1000),
+                    "quantity": sec.quantity,
+                    "total_expected": value_per_bond * sec.quantity,
+                })
+            except:
+                pass
+    
+    result.sort(key=lambda x: x["coupon_date"], reverse=True)
+    return result
 
 
 @router.post("/{portfolio_id}/process-accruals")
