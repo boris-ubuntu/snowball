@@ -77,13 +77,23 @@ async def _refresh_dividends_for_ticker(db: Session, ticker: str):
 
 
 async def refresh_dividends_background(db: Session, portfolio_id: int):
-    """Refresh dividends for all securities in portfolio (background)."""
+    """Refresh dividends for all securities in portfolio (background).
+    Uses dohod.ru as primary source (has future dividends for SBER, MDMG, etc.)
+    and MOEX as fallback (historical dividends)."""
     from .. import crud
     
     securities = crud.get_portfolio_securities(db, portfolio_id)
     logger.info(f"🔄 Background: refreshing dividends for {len(securities)} securities")
     
-    # Batch: 3 at a time (MOEX rate limiting)
+    # 1. Refresh dohod.ru dividends (primary source for future dividends)
+    try:
+        from .dohod_service import fetch_dohod_dividends
+        await fetch_dohod_dividends(db, force_refresh=True)
+        logger.info("✅ Background: dohod.ru dividends refreshed")
+    except Exception as e:
+        logger.debug(f"Background dohod.ru refresh failed: {e}")
+    
+    # 2. Refresh MOEX dividends (historical data) for each ticker
     semaphore = asyncio.Semaphore(3)
     
     async def _refresh(sec):
