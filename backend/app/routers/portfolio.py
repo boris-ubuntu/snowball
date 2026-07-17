@@ -116,62 +116,54 @@ async def portfolio_dividends(
     db: Session = Depends(get_db),
 ):
     """Get dividends for portfolio securities.
-    Returns cached data instantly if available.
-    If no cache, fetches from MOEX with short timeout (2s) and returns.
-    Background refresh will update cache later."""
+    Primary source: dohod.ru (future dividends).
+    Fallback: MOEX API (historical dividends).
+    Cache-first: returns cached data instantly, fetches from dohod.ru/MOEX only if no cache."""
     portfolio = crud.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     
-    from ..services.cache_service import get_cached_data
-    from .. import crud as _crud
+    from ..services.cache_service import get_cached_data as _get_cache
+    from ..services.dohod_service import get_dohod_dividends_for_portfolio
+    from ..services.moex_dividends import get_portfolio_dividends_all
     
-    securities = _crud.get_portfolio_securities(db, portfolio_id)
     today = date.today()
-    result = []
-    need_fetch = False
     
-    for sec in securities:
-        if sec.quantity <= 0:
-            continue
-        cached = get_cached_data(db, sec.ticker, 'dividends')
-        if cached is None:
-            need_fetch = True
-            continue
-        for div in cached:
-            try:
-                close_date = datetime.strptime(div["registry_close_date"], "%Y-%m-%d").date()
-                if all or close_date >= today:
-                    result.append({
-                        "ticker": sec.ticker,
-                        "name": sec.name,
-                        "isin": div.get("isin", ""),
-                        "registry_close_date": div["registry_close_date"],
-                        "value_per_share": div["value"],
-                        "currency": div.get("currency", "RUB"),
-                        "quantity": sec.quantity,
-                        "total_expected": div["value"] * sec.quantity,
-                    })
-            except:
-                pass
-    
-    # If no cache at all, do a quick MOEX fetch (short timeout) to get initial data
-    if need_fetch and not result:
-        try:
-            from ..services.moex_dividends import get_portfolio_dividends_all
-            api_divs = await get_portfolio_dividends_all(db, portfolio_id, force_refresh=True)
-            for d in api_divs:
+    # Try dohod.ru first (it has future dividends for SBER, MDMG, etc.)
+    try:
+        dohod_divs = await get_dohod_dividends_for_portfolio(db, portfolio_id, force_refresh=force_refresh)
+        if dohod_divs:
+            # Filter by date
+            result = []
+            for d in dohod_divs:
                 try:
                     close_date = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
                     if all or close_date >= today:
                         result.append(d)
                 except:
                     pass
-        except Exception as e:
-            logger.debug(f"Quick MOEX dividends fetch failed: {e}")
+            result.sort(key=lambda x: x["registry_close_date"], reverse=True)
+            return result
+    except Exception as e:
+        logger.debug(f"Dohod dividends fetch failed: {e}")
     
-    result.sort(key=lambda x: x["registry_close_date"], reverse=True)
-    return result
+    # Fallback: try MOEX API (historical dividends)
+    try:
+        moex_divs = await get_portfolio_dividends_all(db, portfolio_id, force_refresh=force_refresh)
+        result = []
+        for d in moex_divs:
+            try:
+                close_date = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
+                if all or close_date >= today:
+                    result.append(d)
+            except:
+                pass
+        result.sort(key=lambda x: x["registry_close_date"], reverse=True)
+        return result
+    except Exception as e:
+        logger.debug(f"MOEX dividends fetch failed: {e}")
+    
+    return []
 
 
 @router.get("/{portfolio_id}/coupons")

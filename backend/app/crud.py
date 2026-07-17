@@ -620,28 +620,33 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
         all_divs = []
         all_coups = []
         
+        # Try dohod.ru cache first (it has future dividends for SBER, MDMG, etc.)
+        dohod_cache = get_cached_data(db, "ALL", "dohod_dividends")
+        if dohod_cache:
+            from .services.dohod_service import get_dohod_dividends_for_portfolio
+            try:
+                dohod_divs = await get_dohod_dividends_for_portfolio(db, portfolio_id, force_refresh=False)
+                for d in dohod_divs:
+                    try:
+                        dd = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
+                        if today <= dd <= one_year:
+                            all_divs.append({
+                                "ticker": d["ticker"],
+                                "name": d["name"],
+                                "registry_close_date": d["registry_close_date"],
+                                "value_per_share": d["value_per_share"],
+                                "quantity": d["quantity"],
+                                "total_expected": d["total_expected"],
+                            })
+                    except:
+                        pass
+            except:
+                pass
+        
         for sec_ref in positions:
             sec = sec_ref.security
             if not sec or sec_ref.quantity <= 0:
                 continue
-            
-            # Get dividends from cache only
-            sec_divs = get_cached_data(db, sec.ticker, 'dividends')
-            if sec_divs:
-                for div in sec_divs:
-                    try:
-                        dd = datetime.strptime(div["registry_close_date"], "%Y-%m-%d").date()
-                        if today <= dd <= one_year:
-                            all_divs.append({
-                                "ticker": sec.ticker,
-                                "name": sec.name,
-                                "registry_close_date": div["registry_close_date"],
-                                "value_per_share": div["value"],
-                                "quantity": sec_ref.quantity,
-                                "total_expected": div["value"] * sec_ref.quantity,
-                            })
-                    except:
-                        pass
             
             # Get coupons from cache only
             if sec.security_type in ("bond", "ofz"):
