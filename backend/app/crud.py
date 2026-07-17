@@ -615,17 +615,17 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
         today = date.today()
         one_year = today + timedelta(days=365)
         
-        # === Fast path: load dividends/coupons from cache only ===
+        # === Fast path: only use cached data, no MOEX API calls ===
+        # The background refresh service will populate the cache
         all_divs = []
         all_coups = []
-        cache_hit_all = True  # track if all tickers had cache
         
         for sec_ref in positions:
             sec = sec_ref.security
             if not sec or sec_ref.quantity <= 0:
                 continue
             
-            # Get dividends from cache
+            # Get dividends from cache only
             sec_divs = get_cached_data(db, sec.ticker, 'dividends')
             if sec_divs:
                 for div in sec_divs:
@@ -642,10 +642,8 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
                             })
                     except:
                         pass
-            else:
-                cache_hit_all = False  # missing cache for this ticker
             
-            # Get coupons from cache
+            # Get coupons from cache only
             if sec.security_type in ("bond", "ofz"):
                 sec_coups = get_cached_data(db, sec.ticker, 'coupons')
                 if sec_coups:
@@ -668,41 +666,7 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
                                 })
                         except:
                             pass
-                else:
-                    cache_hit_all = False  # missing cache for this bond/ofz
         
-        # === Fallback: if any cache is missing, fetch from MOEX API ===
-        if not cache_hit_all:
-            try:
-                logger.info("Cache miss for some tickers, falling back to MOEX API...")
-                from .services.moex_dividends import get_portfolio_dividends_all
-                from .services.moex_coupons import get_portfolio_coupons
-                
-                api_divs = await get_portfolio_dividends_all(db, portfolio_id, force_refresh=False)
-                api_coups = await get_portfolio_coupons(db, portfolio_id, force_refresh=False)
-                
-                if api_divs:
-                    all_divs = []
-                    for d in api_divs:
-                        try:
-                            dd = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
-                            if today <= dd <= one_year:
-                                all_divs.append(d)
-                        except:
-                            pass
-                
-                if api_coups:
-                    all_coups = []
-                    for c in api_coups:
-                        try:
-                            cd = datetime.strptime(c["coupon_date"], "%Y-%m-%d").date()
-                            if today <= cd <= one_year:
-                                all_coups.append(c)
-                        except:
-                            pass
-            except Exception as e:
-                logger.error(f"Fallback API fetch failed: {e}")
-
         # Исключаем уже начисленные (прошедшие) выплаты из ожидаемого дохода
         accrued_keys = set()
         accrued_txns = db.query(models.Transaction).filter(

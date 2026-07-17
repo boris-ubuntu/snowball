@@ -9,8 +9,20 @@ const DividendsHistogram = {
 
         if (!container || !this.portfolioId) return;
 
-        container.innerHTML = '<div class="loading">Загрузка...</div>';
+        // Try to use cached data from dashboard first (instant display)
+        if (typeof App !== 'undefined' && App.dashboardData && App.dashboardData.portfolio) {
+            const expectedIncome = App.dashboardData.portfolio.expected_annual_income || 0;
+            const expectedYield = App.dashboardData.portfolio.expected_income_yield || 0;
+            if (totalEl) {
+                totalEl.textContent = expectedIncome > 0 ? Utils.formatCurrency(expectedIncome) : '—';
+            }
+            container.innerHTML = '<div class="loading" style="color: var(--text-muted); font-size: 0.7rem;">Обновление...</div>';
+            this.updatePassiveIncomeCard(expectedIncome, null, this.portfolioId);
+        } else {
+            container.innerHTML = '<div class="loading">Загрузка...</div>';
+        }
 
+        // Fetch fresh data in background (non-blocking for UI)
         try {
             const [dividends, coupons, lqdtProjection] = await Promise.all([
                 API.getPortfolioDividends(this.portfolioId, true, false),
@@ -31,7 +43,10 @@ const DividendsHistogram = {
             // Update the passive income card with the same total as the histogram
             this.updatePassiveIncomeCard(totalNext12Months, monthlyData, this.portfolioId);
         } catch (e) {
-            container.innerHTML = '<div class="loading">⚠️ Ошибка загрузки</div>';
+            // Don't show error if we already have cached data displayed
+            if (container.querySelector('.loading')) {
+                container.innerHTML = '<div class="loading">⚠️ Ошибка обновления. Используются кешированные данные.</div>';
+            }
             console.error(e);
         }
     },

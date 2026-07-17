@@ -60,12 +60,10 @@ async def get_dashboard(portfolio_id: int, db: Session = Depends(get_db)):
     portfolio = crud.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    # Автоматически начисляем прошедшие выплаты при открытии дашборда
-    await _auto_accrue(db, portfolio_id)
-    # Get dashboard from cache (fast!)
+    # Get dashboard from DB only (fast, no external API calls)
     result = await crud.get_dashboard(db, portfolio_id)
     
-    # Kick off background refresh of prices, dividends, coupons, CBR rates
+    # Kick off background refresh of prices, dividends, coupons, CBR rates, and auto-accruals
     # This runs in background after the response is sent
     from ..services.background_updater import (
         refresh_all_prices_background,
@@ -77,7 +75,6 @@ async def get_dashboard(portfolio_id: int, db: Session = Depends(get_db)):
     
     async def _background_refresh():
         try:
-            # Create a new DB session for background tasks
             from ..database import SessionLocal
             bg_db = SessionLocal()
             try:
@@ -89,6 +86,8 @@ async def get_dashboard(portfolio_id: int, db: Session = Depends(get_db)):
                     refresh_cbr_rates_background(bg_db),
                     refresh_economy_background(bg_db),
                 )
+                # Auto-accruals in background (non-blocking)
+                await _auto_accrue(bg_db, portfolio_id)
             finally:
                 bg_db.close()
         except Exception as e:
