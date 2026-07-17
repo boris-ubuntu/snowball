@@ -180,14 +180,19 @@ async def get_coupons_for_ticker(db: Session, ticker: str, extrapolate: bool = T
                     if extrapolate:
                         future = extrapolate_future_coupons(result)
                         result.extend(future)
-                    
-                    set_cached_data(db, ticker, 'coupons', result)
-                    return result
+                else:
+                    # Even if empty, cache it to avoid repeated MOEX calls
+                    result = []
+                
+                set_cached_data(db, ticker, 'coupons', result, ttl_minutes=60 if result else 5)
+                return result
 
             except Exception as e:
                 logger.debug(f"MOEX coupons fetch error for {ticker} on {url}: {e}")
                 continue
 
+        # Cache empty result on error to avoid repeated retries
+        set_cached_data(db, ticker, 'coupons', [], ttl_minutes=5)
         return []
 
 

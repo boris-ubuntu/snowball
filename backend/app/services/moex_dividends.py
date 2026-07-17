@@ -76,14 +76,15 @@ async def get_dividends_for_ticker(db: Session, ticker: str, force_refresh: bool
                     "currency": entry.get("currencyid", "RUB"),
                 })
 
-            # Сохраняем в кеш
-            if result:
-                set_cached_data(db, ticker, 'dividends', result)
+            # Always save to cache (even empty) to avoid repeated MOEX calls
+            set_cached_data(db, ticker, 'dividends', result, ttl_minutes=60)
 
             return result
 
         except Exception as e:
             logger.debug(f"MOEX dividends fetch error for {ticker}: {e}")
+            # Cache empty result on error to avoid repeated retries
+            set_cached_data(db, ticker, 'dividends', [], ttl_minutes=5)
             return []
 
 
