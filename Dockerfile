@@ -14,6 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend
 COPY backend/ /app/
 
+# Copy securities dump for seeding
+COPY securities_dump.json /app/securities_dump.json
+
 # Copy frontend (for serving static files)
 COPY frontend/ /frontend/
 

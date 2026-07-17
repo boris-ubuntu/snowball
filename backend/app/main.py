@@ -8,6 +8,7 @@ from .database import init_db, check_db_connection
 from .routers import securities, portfolio, dividends, rates, economy, auth
 from .load_moex_securities import load_all_securities
 from .database import SessionLocal
+from .seed import run_seed
 import os
 
 app = FastAPI(
@@ -50,6 +51,9 @@ def on_startup():
     try:
         init_db()
         print(f"✅ Database initialized successfully")
+        
+        # Seed database with initial data (portfolio, securities from dump)
+        run_seed()
         
         # Load all MOEX securities and ensure currencies in background
         def load_moex():
