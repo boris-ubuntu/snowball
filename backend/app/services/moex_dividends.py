@@ -33,18 +33,21 @@ async def get_dividends_for_ticker(db: Session, ticker: str, force_refresh: bool
             resp = await client.get(url, params=params)
             if resp.status_code != 200:
                 logger.debug(f"MOEX dividends error for {ticker}: HTTP {resp.status_code}")
+                set_cached_data(db, ticker, 'dividends', [], ttl_minutes=5)
                 return []
 
             data = resp.json()
             dividends_data = data.get("dividends", {})
             
             if not dividends_data:
+                set_cached_data(db, ticker, 'dividends', [], ttl_minutes=60)
                 return []
                 
             columns = dividends_data.get("columns", [])
             rows = dividends_data.get("data", [])
 
             if not rows:
+                set_cached_data(db, ticker, 'dividends', [], ttl_minutes=60)
                 return []
 
             result = []
