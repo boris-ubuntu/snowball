@@ -1,0 +1,31 @@
+# Render Blueprint for Snowball
+services:
+  - type: web
+    name: snowball
+    env: docker
+    repo: https://github.com/boris-ubuntu/snowball
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    envVars:
+      - key: DB_HOST
+        value: snowball-db
+      - key: DB_PORT
+        value: "5432"
+      - key: DB_NAME
+        value: snowball
+      - key: DB_USER
+        value: snowball
+      - key: DB_PASS
+        fromDatabase:
+          name: snowball-db
+          property: password
+      - key: SECRET_KEY
+        generateValue: true
+    healthCheckPath: /api/health
+    autoDeploy: true
+
+databases:
+  - name: snowball-db
+    databaseName: snowball
+    user: snowball
+    plan: free

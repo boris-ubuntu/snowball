@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 import logging
 from typing import List, Optional, Dict
@@ -27,7 +28,7 @@ async def get_dividends_for_ticker(db: Session, ticker: str, force_refresh: bool
     url = f"{MOEX_BASE}/securities/{ticker}/dividends.json"
     params = {"iss.meta": "off"}
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=3.0) as client:
         try:
             resp = await client.get(url, params=params)
             if resp.status_code != 200:
@@ -88,28 +89,27 @@ async def get_dividends_for_ticker(db: Session, ticker: str, force_refresh: bool
 
 async def get_portfolio_dividends(db: Session, portfolio_id: int, force_refresh: bool = False) -> List[Dict]:
     """
-    Get upcoming dividends for all securities in a portfolio.
+    Get upcoming dividends for all securities in a portfolio (parallel).
     """
     from .. import crud
 
     securities = crud.get_portfolio_securities(db, portfolio_id)
     today = date.today()
-    all_dividends = []
 
-    for sec in securities:
+    # Parallel fetch all tickers
+    async def _fetch(sec):
         if getattr(sec, "quantity", 0) <= 0:
-            continue
-            
+            return []
         try:
             divs = await get_dividends_for_ticker(db, sec.ticker, force_refresh)
+            result = []
             for div in divs:
                 try:
                     close_date = datetime.strptime(div["registry_close_date"], "%Y-%m-%d").date()
                 except (ValueError, TypeError):
                     continue
-
                 if close_date >= today:
-                    all_dividends.append({
+                    result.append({
                         "ticker": sec.ticker,
                         "name": sec.name,
                         "isin": div.get("isin", ""),
@@ -119,36 +119,44 @@ async def get_portfolio_dividends(db: Session, portfolio_id: int, force_refresh:
                         "quantity": getattr(sec, "quantity", 0),
                         "total_expected": div["value"] * getattr(sec, "quantity", 0),
                     })
+            return result
         except Exception as e:
             logger.debug(f"Error fetching dividends for {sec.ticker}: {e}")
-            continue
+            return []
 
+    # Batch: 5 at a time
+    semaphore = asyncio.Semaphore(5)
+    async def _fetch_limited(sec):
+        async with semaphore:
+            return await _fetch(sec)
+
+    results = await asyncio.gather(*[_fetch_limited(sec) for sec in securities])
+    all_dividends = [d for batch in results for d in batch]
     all_dividends.sort(key=lambda x: x["registry_close_date"])
     return all_dividends
 
 
 async def get_portfolio_dividends_all(db: Session, portfolio_id: int, force_refresh: bool = False) -> List[Dict]:
     """
-    Get ALL dividends (past and future) for all securities in a portfolio.
+    Get ALL dividends (past and future) for all securities in a portfolio (parallel).
+    Дополнительно подмешиваются данные из dohod.ru (по полю Security.dohod_name).
     """
     from .. import crud
 
     securities = crud.get_portfolio_securities(db, portfolio_id)
-    all_dividends = []
 
-    for sec in securities:
+    async def _fetch(sec):
         if getattr(sec, "quantity", 0) <= 0:
-            continue
-            
+            return []
         try:
             divs = await get_dividends_for_ticker(db, sec.ticker, force_refresh)
+            result = []
             for div in divs:
                 try:
                     close_date = datetime.strptime(div["registry_close_date"], "%Y-%m-%d").date()
                 except (ValueError, TypeError):
                     continue
-
-                all_dividends.append({
+                result.append({
                     "ticker": sec.ticker,
                     "name": sec.name,
                     "isin": div.get("isin", ""),
@@ -157,10 +165,35 @@ async def get_portfolio_dividends_all(db: Session, portfolio_id: int, force_refr
                     "currency": div.get("currency", "RUB"),
                     "quantity": getattr(sec, "quantity", 0),
                     "total_expected": div["value"] * getattr(sec, "quantity", 0),
+                    "source": "moex",
                 })
+            return result
         except Exception as e:
             logger.debug(f"Error fetching dividends for {sec.ticker}: {e}")
-            continue
+            return []
+
+    # Parallel with semaphore
+    semaphore = asyncio.Semaphore(5)
+    async def _fetch_limited(sec):
+        async with semaphore:
+            return await _fetch(sec)
+
+    results = await asyncio.gather(*[_fetch_limited(sec) for sec in securities])
+    all_dividends = [d for batch in results for d in batch]
+
+    # Дополняем данными из dohod.ru (источник может содержать больше актуальных выплат)
+    try:
+        from .dohod_service import get_dohod_dividends_for_portfolio
+        dohod_divs = await get_dohod_dividends_for_portfolio(db, portfolio_id, force_refresh)
+        # Помечаем уже добавленные тикеры+даты, чтобы не дублировать
+        seen = {(d["ticker"], d["registry_close_date"]) for d in all_dividends}
+        for d in dohod_divs:
+            key = (d["ticker"], d["registry_close_date"])
+            if key not in seen:
+                all_dividends.append(d)
+                seen.add(key)
+    except Exception as e:
+        logger.debug(f"Error fetching dohod dividends for portfolio {portfolio_id}: {e}")
 
     all_dividends.sort(key=lambda x: x["registry_close_date"], reverse=True)
     return all_dividends

@@ -282,9 +282,17 @@ def create_transaction(db: Session, portfolio_id: int, data: schemas.Transaction
             db.add(position)
     elif data.transaction_type == "sell":
         if position:
+            # Calculate realized profit/loss on this sale
+            sell_revenue = data.quantity * data.price - data.commission
+            cost_of_sold = position.avg_price * data.quantity if position.avg_price else 0
+            realized = sell_revenue - cost_of_sold
+            position.realized_profit = (position.realized_profit or 0) + realized
+            
             position.quantity -= data.quantity
             if position.quantity <= 0:
-                db.delete(position)
+                # Keep position with quantity=0 to preserve realized_profit
+                position.quantity = 0
+                position.avg_price = 0
     elif data.transaction_type == "accrual":
         accrual_amount = total_amount
         if position:
@@ -308,9 +316,139 @@ def delete_transaction(db: Session, transaction_id: int) -> bool:
     transaction = get_transaction(db, transaction_id)
     if not transaction:
         return False
+    portfolio_id = transaction.portfolio_id
+    security_id = transaction.security_id
     db.delete(transaction)
     db.commit()
+    # Recalculate position after deletion
+    recalculate_position(db, portfolio_id, security_id)
     return True
+
+
+def recalculate_position(db: Session, portfolio_id: int, security_id: int):
+    """Recalculate position (quantity, avg_price, total_accruals, realized_profit) from all transactions."""
+    from collections import defaultdict
+    
+    all_txns = db.query(models.Transaction).filter(
+        models.Transaction.portfolio_id == portfolio_id,
+        models.Transaction.security_id == security_id,
+    ).order_by(models.Transaction.transaction_date, models.Transaction.id).all()
+    
+    position = db.query(models.PortfolioPosition).filter(
+        models.PortfolioPosition.portfolio_id == portfolio_id,
+        models.PortfolioPosition.security_id == security_id,
+    ).first()
+    
+    if not all_txns:
+        # No transactions left - delete position
+        if position:
+            db.query(models.PortfolioPosition).filter(
+                models.PortfolioPosition.portfolio_id == portfolio_id,
+                models.PortfolioPosition.security_id == security_id,
+            ).delete()
+        db.commit()
+        return
+    
+    total_qty = 0
+    total_cost = 0.0
+    total_accruals = 0.0
+    realized_profit = 0.0
+    
+    # FIFO tracking for realized P&L
+    buys = []  # list of (qty, price)
+    
+    for tx in all_txns:
+        if tx.transaction_type == "buy":
+            total_qty += tx.quantity
+            total_cost += tx.quantity * tx.price + tx.commission
+            buys.append((tx.quantity, tx.price))
+        elif tx.transaction_type == "sell":
+            remaining_sell = tx.quantity
+            sell_revenue = tx.quantity * tx.price - tx.commission
+            cost_of_sold = 0
+            while remaining_sell > 0 and buys:
+                buy_qty, buy_price = buys[0]
+                used = min(buy_qty, remaining_sell)
+                cost_of_sold += used * buy_price
+                remaining_sell -= used
+                if used >= buy_qty:
+                    buys.pop(0)
+                else:
+                    buys[0] = (buy_qty - used, buy_price)
+            realized_profit += sell_revenue - cost_of_sold
+            total_qty -= tx.quantity
+            if total_qty < 0:
+                total_qty = 0
+        elif tx.transaction_type == "accrual":
+            total_accruals += tx.total_amount
+    
+    avg_price = total_cost / total_qty if total_qty > 0 else 0
+    
+    if position:
+        position.quantity = total_qty
+        position.avg_price = avg_price
+        position.total_accruals = total_accruals
+        position.realized_profit = realized_profit
+    elif total_qty > 0 or total_accruals > 0:
+        position = models.PortfolioPosition(
+            portfolio_id=portfolio_id,
+            security_id=security_id,
+            quantity=total_qty,
+            avg_price=avg_price,
+            total_accruals=total_accruals,
+            realized_profit=realized_profit,
+        )
+        db.add(position)
+    
+    db.commit()
+
+
+def update_transaction(db: Session, transaction_id: int, data: schemas.TransactionUpdate) -> Optional[models.Transaction]:
+    transaction = get_transaction(db, transaction_id)
+    if not transaction:
+        return None
+    old_qty = transaction.quantity
+    old_price = transaction.price
+    old_type = transaction.transaction_type
+    
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(transaction, field, value)
+    
+    # Recalculate total_amount if quantity or price changed
+    if 'quantity' in update_data or 'price' in update_data or 'transaction_type' in update_data:
+        if transaction.transaction_type == "sell":
+            transaction.total_amount = transaction.quantity * transaction.price - transaction.commission
+        elif transaction.transaction_type == "accrual":
+            pass  # keep original total_amount for accruals
+        else:
+            transaction.total_amount = transaction.quantity * transaction.price + transaction.commission
+    
+    db.commit()
+    db.refresh(transaction)
+    
+    # Recalculate position for this security from scratch
+    recalculate_position(db, transaction.portfolio_id, transaction.security_id)
+    
+    return transaction
+
+
+def delete_transactions_by_security(db: Session, portfolio_id: int, security_id: int) -> int:
+    """Delete all transactions for a security in a portfolio. Returns count of deleted transactions."""
+    from sqlalchemy import func
+    deleted = db.query(models.Transaction).filter(
+        models.Transaction.portfolio_id == portfolio_id,
+        models.Transaction.security_id == security_id,
+    ).delete(synchronize_session='fetch')
+    
+    # Also delete the position for this security
+    db.query(models.PortfolioPosition).filter(
+        models.PortfolioPosition.portfolio_id == portfolio_id,
+        models.PortfolioPosition.security_id == security_id,
+    ).delete(synchronize_session='fetch')
+    
+    db.commit()
+    return deleted
 
 
 # === Dividends ===
@@ -330,7 +468,7 @@ def create_dividend(db: Session, data: schemas.DividendCreate) -> models.Dividen
 
 
 # === Dashboard ===
-def get_dashboard(db: Session, portfolio_id: int) -> dict:
+async def get_dashboard(db: Session, portfolio_id: int) -> dict:
     positions = get_positions(db, portfolio_id)
     
     total_accruals_all = db.query(func.sum(models.Transaction.total_amount)).filter(
@@ -339,21 +477,64 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
     ).scalar() or 0
     
     # Fetch CBR exchange rates for currency conversion
-    import asyncio
-    from .services.cbr_service import fetch_cbr_rates, convert_to_rub
-    try:
-        cbr_rates = asyncio.run(fetch_cbr_rates())
-    except Exception:
-        cbr_rates = {"RUB": 1.0, "USD": 88.0, "EUR": 96.0, "CNY": 12.0, "AED": 24.0}
+    from .services.cache_service import get_cached_data
+    cached_rates = get_cached_data(db, "CBR_ALL", "cbr_rates")
+    if cached_rates:
+        cbr_rates = {r["currency"]: r["rate"] for r in cached_rates}
+    else:
+        from .services.cbr_service import fetch_cbr_rates, convert_to_rub
+        try:
+            cbr_rates = await fetch_cbr_rates()
+        except Exception:
+            cbr_rates = {"RUB": 1.0, "USD": 90.0, "EUR": 98.0, "CNY": 12.0, "AED": 24.0}
     
     total_invested = 0  # in RUB
     total_value = 0  # in RUB
     total_invested_income_assets = 0
+    total_realized_profit = 0  # Sum of all realized P&L from sold positions
     position_list = []
+
+    # Calculate realized P&L from all buy/sell pairs using FIFO
+    all_txns = db.query(models.Transaction).filter(
+        models.Transaction.portfolio_id == portfolio_id,
+    ).order_by(models.Transaction.transaction_date, models.Transaction.id).all()
+    
+    # Calculate realized P&L per security using FIFO-like approach
+    from collections import defaultdict
+    sec_buys = defaultdict(list)  # security_id -> [(qty, price)]
+    sec_realized = defaultdict(float)  # security_id -> realized P&L
+    
+    for tx in all_txns:
+        if tx.transaction_type == "buy":
+            sec_buys[tx.security_id].append((tx.quantity, tx.price))
+        elif tx.transaction_type == "sell":
+            remaining_sell = tx.quantity
+            sell_revenue = tx.quantity * tx.price - tx.commission
+            cost_of_sold = 0
+            buys = sec_buys[tx.security_id]
+            while remaining_sell > 0 and buys:
+                buy_qty, buy_price = buys[0]
+                used = min(buy_qty, remaining_sell)
+                cost_of_sold += used * buy_price
+                remaining_sell -= used
+                if used >= buy_qty:
+                    buys.pop(0)
+                else:
+                    buys[0] = (buy_qty - used, buy_price)
+            sec_realized[tx.security_id] += sell_revenue - cost_of_sold
+
+    from .services.cbr_service import convert_to_rub
 
     for pos in positions:
         if not pos.security:
             continue
+        
+        # Track realized profit/loss: use stored field OR calculated from transactions
+        stored_realized = pos.realized_profit or 0
+        calculated_realized = sec_realized.get(pos.security_id, 0)
+        # Use the larger (more complete) value - calculated from transactions is authoritative
+        realized = calculated_realized if calculated_realized != 0 else stored_realized
+        total_realized_profit += realized
         
         # Determine currency for this position
         sec_currency = pos.security.currency or "RUB"
@@ -362,9 +543,19 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
         market_price_currency = pos.security.current_price or pos.avg_price or 0
         value_in_currency = market_price_currency * pos.quantity
         
-        # Convert to RUB
-        cost_rub = convert_to_rub(cost_in_currency, sec_currency, cbr_rates)
-        value_rub = convert_to_rub(value_in_currency, sec_currency, cbr_rates)
+        # For currency type securities, show profit/loss based on exchange rate change
+        if pos.security.security_type == "currency":
+            # Current CBR rate is the "current price" for currencies
+            cbr_rate = cbr_rates.get(sec_currency, 1.0)
+            cost_rub = cost_in_currency  # avg_price * quantity (already in RUB)
+            # Current value = quantity * current CBR rate (in RUB)
+            value_rub = pos.quantity * cbr_rate
+            # Override current_price to show CBR rate
+            market_price_currency = cbr_rate
+        else:
+            # Convert to RUB
+            cost_rub = convert_to_rub(cost_in_currency, sec_currency, cbr_rates)
+            value_rub = convert_to_rub(value_in_currency, sec_currency, cbr_rates)
         
         total_invested += cost_rub
         total_value += value_rub
@@ -373,10 +564,13 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
             total_invested_income_assets += cost_rub
         
         accruals = pos.total_accruals or 0
-        profit = value_rub - cost_rub + accruals
+        # Profit = current value - cost + accruals + realized_profit
+        unrealized_profit = value_rub - cost_rub
+        profit = unrealized_profit + accruals + realized
         
-        if cost_rub > 0:
-            profit_percent = ((value_rub + accruals) / cost_rub - 1) * 100
+        if (cost_rub + abs(realized)) > 0:
+            total_invested_for_percent = cost_rub + abs(realized) if realized < 0 else cost_rub
+            profit_percent = ((value_rub + accruals + realized) / total_invested_for_percent - 1) * 100
         else:
             profit_percent = 0
 
@@ -392,6 +586,7 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
             total_cost=round(cost_rub, 2),
             total_value=round(value_rub, 2),
             total_accruals=round(accruals, 2),
+            realized_profit=round(realized, 2),
             profit=round(profit, 2),
             profit_percent=round(profit_percent, 2),
             share=0,
@@ -400,10 +595,13 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
     for p in position_list:
         p.share = round((p.total_value / total_value * 100), 2) if total_value > 0 else 0
 
-    total_return = total_value - total_invested + total_accruals_all
+    # Total return = current value - current invested + accruals + realized profit/loss from sales
+    total_return = total_value - total_invested + total_accruals_all + total_realized_profit
     
-    if total_invested > 0:
-        total_return_percent = ((total_value + total_accruals_all) / total_invested - 1) * 100
+    # For percentage, use total invested including what was spent on sold positions
+    total_invested_for_percent = total_invested + abs(total_realized_profit) if total_realized_profit < 0 else total_invested
+    if total_invested_for_percent > 0:
+        total_return_percent = ((total_value + total_accruals_all + total_realized_profit) / total_invested_for_percent - 1) * 100
     else:
         total_return_percent = 0
 
@@ -411,49 +609,236 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
     expected_income_yield = 0
     
     try:
-        import asyncio
         from datetime import timedelta
-        from app.services.moex_dividends import get_portfolio_dividends_all
-        from app.services.moex_coupons import get_portfolio_coupons
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            all_divs = loop.run_until_complete(get_portfolio_dividends_all(db, portfolio_id, force_refresh=False))
-            all_coups = loop.run_until_complete(get_portfolio_coupons(db, portfolio_id, force_refresh=False))
-
-            today = date.today()
-            one_year = today + timedelta(days=365)
-
-            for d in all_divs:
-                try:
-                    d_date = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
-                    if today <= d_date <= one_year:
-                        expected_annual_income += d.get("total_expected", 0)
-                except:
-                    pass
-
-            for c in all_coups:
-                try:
-                    c_date = datetime.strptime(c["coupon_date"], "%Y-%m-%d").date()
-                    if today <= c_date <= one_year:
-                        expected_annual_income += c.get("total_expected", 0)
-                except:
-                    pass
-
-            # Рассчитываем доходность
-            invested_in_income_assets = 0
-            for pos in positions:
-                if pos.security and pos.security.security_type in ("stock", "bond", "ofz"):
-                    invested_in_income_assets += (pos.avg_price or 0) * pos.quantity
-
-            if invested_in_income_assets > 0 and expected_annual_income > 0:
-                expected_income_yield = (expected_annual_income / invested_in_income_assets) * 100
+        from .services.cache_service import get_cached_data
+        
+        today = date.today()
+        one_year = today + timedelta(days=365)
+        
+        # === Fast path: load dividends/coupons from cache only ===
+        all_divs = []
+        all_coups = []
+        cache_hit_all = True  # track if all tickers had cache
+        
+        for sec_ref in positions:
+            sec = sec_ref.security
+            if not sec or sec_ref.quantity <= 0:
+                continue
             
-        finally:
-            loop.close()
+            # Get dividends from cache
+            sec_divs = get_cached_data(db, sec.ticker, 'dividends')
+            if sec_divs:
+                for div in sec_divs:
+                    try:
+                        dd = datetime.strptime(div["registry_close_date"], "%Y-%m-%d").date()
+                        if today <= dd <= one_year:
+                            all_divs.append({
+                                "ticker": sec.ticker,
+                                "name": sec.name,
+                                "registry_close_date": div["registry_close_date"],
+                                "value_per_share": div["value"],
+                                "quantity": sec_ref.quantity,
+                                "total_expected": div["value"] * sec_ref.quantity,
+                            })
+                    except:
+                        pass
+            else:
+                cache_hit_all = False  # missing cache for this ticker
+            
+            # Get coupons from cache
+            if sec.security_type in ("bond", "ofz"):
+                sec_coups = get_cached_data(db, sec.ticker, 'coupons')
+                if sec_coups:
+                    for coup in sec_coups:
+                        try:
+                            cd_str = coup["coupon_date"]
+                            if isinstance(cd_str, datetime):
+                                cd_str = cd_str.strftime("%Y-%m-%d")
+                            cd = datetime.strptime(cd_str, "%Y-%m-%d").date()
+                            if today <= cd <= one_year:
+                                value_per = coup.get("value_rub", coup.get("value", 0))
+                                all_coups.append({
+                                    "ticker": sec.ticker,
+                                    "name": sec.name,
+                                    "isin": coup.get("isin", ""),
+                                    "coupon_date": cd_str,
+                                    "value_per_bond": value_per,
+                                    "quantity": sec_ref.quantity,
+                                    "total_expected": value_per * sec_ref.quantity,
+                                })
+                        except:
+                            pass
+                else:
+                    cache_hit_all = False  # missing cache for this bond/ofz
+        
+        # === Fallback: if any cache is missing, fetch from MOEX API ===
+        if not cache_hit_all:
+            try:
+                logger.info("Cache miss for some tickers, falling back to MOEX API...")
+                from .services.moex_dividends import get_portfolio_dividends_all
+                from .services.moex_coupons import get_portfolio_coupons
+                
+                api_divs = await get_portfolio_dividends_all(db, portfolio_id, force_refresh=False)
+                api_coups = await get_portfolio_coupons(db, portfolio_id, force_refresh=False)
+                
+                if api_divs:
+                    all_divs = []
+                    for d in api_divs:
+                        try:
+                            dd = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
+                            if today <= dd <= one_year:
+                                all_divs.append(d)
+                        except:
+                            pass
+                
+                if api_coups:
+                    all_coups = []
+                    for c in api_coups:
+                        try:
+                            cd = datetime.strptime(c["coupon_date"], "%Y-%m-%d").date()
+                            if today <= cd <= one_year:
+                                all_coups.append(c)
+                        except:
+                            pass
+            except Exception as e:
+                logger.error(f"Fallback API fetch failed: {e}")
+
+        # Исключаем уже начисленные (прошедшие) выплаты из ожидаемого дохода
+        accrued_keys = set()
+        accrued_txns = db.query(models.Transaction).filter(
+            models.Transaction.portfolio_id == portfolio_id,
+            models.Transaction.transaction_type == "accrual",
+        ).all()
+        for tx in accrued_txns:
+            accrued_keys.add((tx.security_id, str(tx.transaction_date)))
+
+        for d in all_divs:
+            try:
+                d_date = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
+                if today <= d_date <= one_year:
+                    sec = get_security_by_ticker(db, d.get("ticker"))
+                    if sec and (sec.id, d["registry_close_date"]) in accrued_keys:
+                        continue  # уже начислено -> не ждём
+                    expected_annual_income += d.get("total_expected", 0)
+            except:
+                pass
+
+        for c in all_coups:
+            try:
+                c_date = datetime.strptime(c["coupon_date"], "%Y-%m-%d").date()
+                if today <= c_date <= one_year:
+                    sec = get_security_by_ticker(db, c.get("ticker"))
+                    if sec and (sec.id, c["coupon_date"]) in accrued_keys:
+                        continue  # уже начислено -> не ждём
+                    expected_annual_income += c.get("total_expected", 0)
+            except:
+                pass
+
+        # Рассчитываем доходность от стоимости только тех активов, которые платят
+        # дивиденды/купоны в следующие 12 месяцев
+        paying_security_ids = set()
+        for d in all_divs:
+            try:
+                d_date = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
+                if today <= d_date <= one_year:
+                    sec = get_security_by_ticker(db, d.get("ticker"))
+                    if sec:
+                        paying_security_ids.add(sec.id)
+            except:
+                pass
+        for c in all_coups:
+            try:
+                c_date = datetime.strptime(c["coupon_date"], "%Y-%m-%d").date()
+                if today <= c_date <= one_year:
+                    sec = get_security_by_ticker(db, c.get("ticker"))
+                    if sec:
+                        paying_security_ids.add(sec.id)
+            except:
+                pass
+
+        # Суммируем стоимость только тех позиций, которые платят
+        paying_value = 0
+        for p in position_list:
+            if p.security_id in paying_security_ids:
+                paying_value += p.total_value
+
+        portfolio_value_for_yield = paying_value if paying_value > 0 else total_value
+        if portfolio_value_for_yield > 0 and expected_annual_income > 0:
+            expected_income_yield = (expected_annual_income / portfolio_value_for_yield) * 100
+            
     except Exception as e:
         logger.error(f"Error calculating expected annual income: {e}")
+
+    # === Calculate 12-month metrics ===
+    twelve_months_ago = date.today() - timedelta(days=365)
+    txns_12m = db.query(models.Transaction).filter(
+        models.Transaction.portfolio_id == portfolio_id,
+        models.Transaction.transaction_date >= twelve_months_ago,
+    ).all()
+
+    total_invested_12m = 0  # total spent on buys in last 12 months
+    total_sold_12m = 0      # total revenue from sells in last 12 months
+    total_accruals_12m = 0  # total accruals in last 12 months
+    realized_profit_12m = 0 # profit from buy/sell (without accruals) in last 12 months
+    
+    # Also calculate 12-month passive income from dividends/coupons in MOEX data
+    passive_income_12m = 0
+
+    # Recalculate realized P&L for 12 months using FIFO but only for sales in this period
+    # We need buys before the period too for cost basis
+    all_txns_12m_with_prior = db.query(models.Transaction).filter(
+        models.Transaction.portfolio_id == portfolio_id,
+        models.Transaction.transaction_date <= date.today(),
+    ).order_by(models.Transaction.transaction_date, models.Transaction.id).all()
+
+    sec_buys_12m = defaultdict(list)
+    sec_realized_12m = defaultdict(float)
+
+    for tx in all_txns_12m_with_prior:
+        if tx.transaction_type == "buy":
+            sec_buys_12m[tx.security_id].append((tx.quantity, tx.price))
+        elif tx.transaction_type == "sell":
+            # Only count sales within the 12-month window
+            if tx.transaction_date < twelve_months_ago:
+                # Still consume buys for cost basis, but don't count realized profit
+                remaining_sell = tx.quantity
+                buys = sec_buys_12m[tx.security_id]
+                while remaining_sell > 0 and buys:
+                    buy_qty, buy_price = buys[0]
+                    used = min(buy_qty, remaining_sell)
+                    remaining_sell -= used
+                    if used >= buy_qty:
+                        buys.pop(0)
+                    else:
+                        buys[0] = (buy_qty - used, buy_price)
+            else:
+                remaining_sell = tx.quantity
+                sell_revenue = tx.quantity * tx.price - tx.commission
+                cost_of_sold = 0
+                buys = sec_buys_12m[tx.security_id]
+                while remaining_sell > 0 and buys:
+                    buy_qty, buy_price = buys[0]
+                    used = min(buy_qty, remaining_sell)
+                    cost_of_sold += used * buy_price
+                    remaining_sell -= used
+                    if used >= buy_qty:
+                        buys.pop(0)
+                    else:
+                        buys[0] = (buy_qty - used, buy_price)
+                sec_realized_12m[tx.security_id] += sell_revenue - cost_of_sold
+                total_sold_12m += sell_revenue
+        elif tx.transaction_type == "accrual" and tx.transaction_date >= twelve_months_ago:
+            total_accruals_12m += tx.total_amount
+
+    # 12-month total invested = sum of all buy transactions in the period
+    total_invested_12m = db.query(func.sum(models.Transaction.total_amount)).filter(
+        models.Transaction.portfolio_id == portfolio_id,
+        models.Transaction.transaction_type == "buy",
+        models.Transaction.transaction_date >= twelve_months_ago,
+    ).scalar() or 0
+
+    realized_profit_12m = sum(sec_realized_12m.values())
+    total_return_12m = total_accruals_12m + realized_profit_12m
 
     recent_txns = get_transactions(db, portfolio_id, limit=10)
 
@@ -467,6 +852,9 @@ def get_dashboard(db: Session, portfolio_id: int) -> dict:
             expected_annual_income=round(expected_annual_income, 2),
             expected_income_yield=round(expected_income_yield, 2),
             position_count=len(position_list),
+            total_return_12m=round(total_return_12m, 2),
+            total_invested_12m=round(total_invested_12m, 2),
+            realized_profit_12m=round(realized_profit_12m, 2),
         ),
         positions=position_list,
         recent_transactions=recent_txns,

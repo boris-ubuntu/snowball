@@ -44,7 +44,10 @@ const ModalComponent = {
     },
 
     bindEvents() {
-        document.getElementById('add-transaction-btn').addEventListener('click', () => this.open());
+        const addTxBtn = document.getElementById('add-transaction-btn');
+        if (addTxBtn) {
+            addTxBtn.addEventListener('click', () => this.open());
+        }
         document.getElementById('close-modal').addEventListener('click', () => this.close());
         document.getElementById('modal-overlay').addEventListener('click', (e) => {
             if (e.target === e.currentTarget) this.close();
@@ -56,11 +59,18 @@ const ModalComponent = {
             this.filterSecurities(e.target.value);
         });
 
-        // Select on click
+        // Select on click - auto-fill price from security's current_price
         document.getElementById('ticker-select').addEventListener('change', (e) => {
             const selected = e.target.selectedOptions[0];
             if (selected && selected.value) {
                 document.getElementById('ticker-search').value = selected.text;
+                // Auto-fill price from security's current price
+                const secId = parseInt(selected.value);
+                const sec = this.securities.find(s => s.id === secId);
+                if (sec && sec.current_price) {
+                    document.getElementById('tx-price').value = sec.current_price;
+                }
+                this.calcTotal();
             }
         });
 

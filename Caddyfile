@@ -1,0 +1,21 @@
+# Caddy reverse proxy for PWA HTTPS support
+# For local network: use IP address as domain
+# For production: replace with your domain
+# Run: caddy run --config Caddyfile
+
+:443 {
+    tls internal  # Self-signed cert for local development
+    
+    reverse_proxy backend:8000
+    
+    header {
+        # Security headers for PWA
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+}
+
+:80 {
+    redir :443{uri}
+}

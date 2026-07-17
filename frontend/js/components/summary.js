@@ -9,6 +9,8 @@ const SummaryComponent = {
         const expectedIncomeEl = document.getElementById('expected-income');
         const totalInvestedEl = document.getElementById('total-invested');
         const returnSubEl = document.getElementById('return-sub');
+        const yieldValueEl = document.getElementById('yield-value');
+        const yieldSubEl = document.getElementById('yield-sub');
 
         // Стоимость
         if (totalValueEl) {
@@ -20,42 +22,37 @@ const SummaryComponent = {
             totalInvestedEl.textContent = Utils.formatCurrency(summary.total_invested);
         }
 
-        // Прибыль — только сумма с треугольником, без процентов
+        // Прибыль — только сумма с маленьким треугольником
         if (totalReturnEl) {
             const prefix = summary.total_return >= 0 ? '▲' : '▼';
             totalReturnEl.textContent = prefix + ' ' + Utils.formatCurrency(Math.abs(summary.total_return));
             totalReturnEl.className = 'card-value ' + (summary.total_return >= 0 ? 'positive' : 'negative');
         }
 
-        // Подпись под прибылью — пассивный доход
+        // Подпись под прибылью — "Выплаты" + сумма всех accruals
         if (returnSubEl) {
-            returnSubEl.textContent = 'Пассивный доход ' + Utils.formatCurrency(summary.total_accruals);
+            returnSubEl.textContent = 'Выплаты ' + Utils.formatCurrency(summary.total_accruals);
         }
 
-        // Пассивный доход — показываем суммарную доходность с треугольником
-        if (totalAccrualsEl) {
-            const pct = summary.total_invested > 0
-                ? ((summary.total_value + summary.total_accruals) / summary.total_invested - 1) * 100
-                : 0;
+        // Пассивный доход — % доходности и сумму в год устанавливает
+        // DividendsHistogram.updatePassiveIncomeCard() после загрузки гистограммы.
+        // Здесь НЕ трогаем #expected-income и #total-accruals, чтобы не перезаписать
+        // точные данные гистограммы ошибочным fallback-ом с бэкенда.
+
+        // Доходность — общая доходность портфеля (текущая стоимость + начисления) / вложено - 1
+        if (yieldValueEl) {
+            const pct = summary.total_return_percent || 0;
             const prefix = pct >= 0 ? '▲' : '▼';
             const colorClass = pct >= 0 ? 'positive' : 'negative';
-            totalAccrualsEl.textContent = prefix + ' ' + Utils.formatPercent(Math.abs(pct));
-            totalAccrualsEl.className = 'card-value ' + colorClass;
+            yieldValueEl.textContent = prefix + ' ' + Utils.formatPercent(Math.abs(pct));
+            yieldValueEl.className = 'card-value ' + colorClass;
         }
 
-        // Подпись под пассивным доходом
-        if (accrualsPercentEl) {
-            const expectedText = summary.expected_annual_income > 0
-                ? Utils.formatCurrency(summary.expected_annual_income)
-                : '—';
-            accrualsPercentEl.innerHTML = `Ожидается за 12 мес: <span id="expected-income">${expectedText}</span>`;
-        }
-
-        if (expectedIncomeEl) {
-            const text = summary.expected_annual_income > 0
-                ? Utils.formatCurrency(summary.expected_annual_income)
-                : '—';
-            expectedIncomeEl.textContent = text;
+        // Подпись: общая доходность
+        if (yieldSubEl) {
+            const pctTotal = summary.total_return_percent || 0;
+            const prefix_ = pctTotal >= 0 ? '▲' : '▼';
+            yieldSubEl.textContent = `За 12 мес: ${prefix_} ${Utils.formatPercent(Math.abs(pctTotal))}`;
         }
     },
 };

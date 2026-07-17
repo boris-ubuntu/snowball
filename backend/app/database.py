@@ -23,6 +23,28 @@ def init_db():
     finally:
         db.close()
 
+    # Migration: add realized_profit column if not exists
+    try:
+        db = SessionLocal()
+        db.execute(text("ALTER TABLE portfolio_positions ADD COLUMN realized_profit FLOAT NOT NULL DEFAULT 0"))
+        db.commit()
+        print("✅ Migration: added realized_profit column")
+    except Exception:
+        pass  # Column already exists
+    finally:
+        db.close()
+
+    # Migration: add dohod_name column to securities if not exists
+    try:
+        db = SessionLocal()
+        db.execute(text("ALTER TABLE securities ADD COLUMN dohod_name VARCHAR(255)"))
+        db.commit()
+        print("✅ Migration: added dohod_name column to securities")
+    except Exception:
+        pass  # Column already exists
+    finally:
+        db.close()
+
 
 def get_db():
     """Dependency for getting DB session"""

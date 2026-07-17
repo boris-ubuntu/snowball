@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from .moex_dividends import get_portfolio_dividends_all
 from .moex_coupons import get_portfolio_coupons
+from .lqdt_service import process_lqdt_accruals
 from .. import crud, schemas
 
 logger = logging.getLogger(__name__)
@@ -12,15 +13,23 @@ logger = logging.getLogger(__name__)
 
 async def check_and_process_accruals(db: Session, portfolio_id: int) -> Dict:
     """
-    Check historical dividends and coupons that have not been accrued yet.
-    Creates accrual transactions for each one if the user held the security
-    on the registry close date.
+    Check historical dividends, coupons, and LQDT daily accruals
+    that have not been processed yet.
 
     Returns summary of what was processed.
     """
     from .. import models
 
-    processed = {"dividends": 0, "coupons": 0, "total_amount": 0}
+    processed = {"dividends": 0, "coupons": 0, "lqdt": 0, "total_amount": 0}
+
+    # Process LQDT daily accruals first
+    try:
+        lqdt_count = await process_lqdt_accruals(db, portfolio_id)
+        processed["lqdt"] = lqdt_count
+        if lqdt_count > 0:
+            logger.info(f"Processed {lqdt_count} LQDT daily accruals")
+    except Exception as e:
+        logger.error(f"LQDT accrual processing failed: {e}")
 
     # Get all existing accrual transactions to avoid duplicates
     existing_accruals = crud.get_transactions(db, portfolio_id, tx_type="accrual", limit=10000)

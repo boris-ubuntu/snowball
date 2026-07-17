@@ -16,6 +16,7 @@ const PositionsComponent = {
             const profitClass = p.profit >= 0 ? 'positive' : 'negative';
             const shareDisplay = p.share > 0 ? p.share.toFixed(2) + '%' : '0%';
             const currentPriceDisplay = p.current_price ? Utils.formatNumber(p.current_price) : '—';
+            const realizedDisplay = p.realized_profit ? (p.realized_profit > 0 ? '▲' : '▼') + ' ' + Utils.formatCurrency(p.realized_profit) : '—';
 
             return `<tr class="pos-row" data-index="${idx}" data-id="${p.id}" style="cursor:pointer;">
                 <td>
@@ -29,6 +30,7 @@ const PositionsComponent = {
                 <td>${Utils.formatCurrency(p.total_value)}</td>
                 <td>${shareDisplay}</td>
                 <td class="${profitClass}" style="font-weight:600">${p.profit >= 0 ? '▲' : '▼'} ${Utils.formatCurrency(p.profit)}</td>
+                <td style="font-size:0.85rem;opacity:0.8">${realizedDisplay}</td>
             </tr>`;
         }).join('');
 
@@ -73,7 +75,7 @@ const PositionsComponent = {
             { icon: '💰', label: 'Начисление', action: () => this.accrual(pos) },
             { icon: '✏️', label: 'Изменить среднюю цену', action: () => this.editAvgPrice(pos) },
             { icon: '📅', label: 'Изменить дату последней сделки', action: () => this.editDate(pos) },
-            { icon: '🗑️', label: 'Удалить операции (актив останется)', action: () => this.deleteOperations(pos) },
+            { icon: '🗑️', label: 'Удалить', action: () => this.deleteOperations(pos) },
         ];
 
         items.forEach(item => {
@@ -148,9 +150,6 @@ const PositionsComponent = {
         if (newPrice === null) return;
         const price = parseFloat(newPrice.replace(',', '.'));
         if (isNaN(price) || price <= 0) return;
-        // We update by creating a dummy transaction that adjusts the average
-        // Or use the backend position update API
-        // For simplicity, create a buy with quantity=0 which triggers avg_price update logic
         if (confirm(`Установить среднюю цену ${pos.ticker} = ${price} ₽?`)) {
             this.updateAvgPrice(pos, price);
         }
@@ -184,31 +183,18 @@ const PositionsComponent = {
     },
 
     async deleteOperations(pos) {
-        if (!confirm(`Удалить ВСЕ операции и позицию по ${pos.ticker}?\nСам актив останется в базе.`)) return;
+        const confirmed = await ConfirmDialog.show(`Точно удалить?\n\nВсе операции и позиция по ${pos.ticker} будут удалены. Сам актив останется.`);
+        if (!confirmed) return;
         try {
             const portfolioId = App.portfolioId;
-            // Delete all transactions for this security
-            const txs = await API.getTransactions(portfolioId, 0, 1000);
-            const secTxs = txs.filter(tx => {
-                const secId = tx.security ? tx.security.id : null;
-                return secId === pos.security_id;
+            const API_BASE = CONFIG.API_BASE;
+            // Use batch delete endpoint
+            const res = await fetch(`${API_BASE}/portfolio/${portfolioId}/transactions/by-security/${pos.security_id}`, {
+                method: 'DELETE',
             });
-            for (const tx of secTxs) {
-                await API.deleteTransaction(portfolioId, tx.id);
-            }
-            // Also delete the position using security_id
-            try {
-                const API_BASE = CONFIG.API_BASE;
-                const res = await fetch(`${API_BASE}/portfolio/${portfolioId}/positions`);
-                const positions = await res.json();
-                const backendPos = positions.find(p => p.security_id === pos.security_id);
-                if (backendPos) {
-                    await fetch(`${API_BASE}/portfolio/${portfolioId}/positions/${backendPos.id}`, {
-                        method: 'DELETE',
-                    });
-                }
-            } catch (e2) {
-                console.error('Error deleting position:', e2);
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || `HTTP ${res.status}`);
             }
             if (typeof App !== 'undefined') App.loadAssetsPositions();
             if (typeof App !== 'undefined') App.loadDashboard(true);

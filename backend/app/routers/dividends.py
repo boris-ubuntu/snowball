@@ -24,3 +24,17 @@ def create_dividend(data: schemas.DividendCreate, db: Session = Depends(get_db))
     if not security:
         raise HTTPException(status_code=404, detail="Security not found")
     return crud.create_dividend(db, data)
+
+
+@router.get("/dohod")
+async def dividends_from_dohod(
+    portfolio_id: int = Query(..., description="ID портфеля"),
+    force_refresh: bool = Query(False, description="Принудительно обновить данные"),
+    db: Session = Depends(get_db),
+):
+    """
+    Возвращает предстоящие дивиденды из dohod.ru, сопоставленные с бумагами портфеля.
+    Сопоставление идёт по полю Security.dohod_name (либо name/short_name).
+    """
+    from ..services.dohod_service import get_dohod_dividends_for_portfolio
+    return await get_dohod_dividends_for_portfolio(db, portfolio_id, force_refresh)

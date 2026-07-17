@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from .config import settings
 from .database import init_db, check_db_connection
-from .routers import securities, portfolio, dividends, rates
+from .routers import securities, portfolio, dividends, rates, economy, auth
 from .load_moex_securities import load_all_securities
 from .database import SessionLocal
 import os
@@ -30,6 +30,8 @@ app.include_router(securities.router)
 app.include_router(portfolio.router)
 app.include_router(dividends.router)
 app.include_router(rates.router)
+app.include_router(economy.router)
+app.include_router(auth.router)
 
 
 @app.get("/api/health")
@@ -93,7 +95,15 @@ if frontend_path.exists():
 
     @app.get("/favicon.svg")
     def serve_favicon():
-        return FileResponse(str(frontend_path / "favicon.svg"))
+        return FileResponse(str(frontend_path / "favicon.svg"), media_type="image/svg+xml")
+
+    @app.get("/manifest.json")
+    def serve_manifest():
+        return FileResponse(str(frontend_path / "manifest.json"), media_type="application/manifest+json")
+
+    @app.get("/sw.js")
+    def serve_sw():
+        return FileResponse(str(frontend_path / "sw.js"), media_type="application/javascript")
 
     @app.api_route("/{full_path:path}", methods=["GET"])
     def serve_static(full_path: str):
@@ -103,5 +113,16 @@ if frontend_path.exists():
             raise HTTPException(status_code=404)
         file_path = frontend_path / full_path
         if file_path.exists() and file_path.is_file():
-            return FileResponse(str(file_path))
-        return FileResponse(str(frontend_path / "index.html"))
+            # Determine media type based on extension
+            ext = file_path.suffix.lower()
+            media_types = {
+                '.png': 'image/png',
+                '.svg': 'image/svg+xml',
+                '.json': 'application/json',
+                '.js': 'application/javascript',
+                '.css': 'text/css',
+                '.html': 'text/html',
+            }
+            media_type = media_types.get(ext, 'application/octet-stream')
+            return FileResponse(str(file_path), media_type=media_type)
+        return FileResponse(str(frontend_path / "index.html"), media_type="text/html")

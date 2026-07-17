@@ -3,39 +3,72 @@ const App = {
     dashboardData: null,  // Кеш для данных главной страницы
 
     async init() {
-        // Set current date
-        document.getElementById('current-date').textContent =
-            new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+        // Check if already authenticated
+        const token = API.getToken();
+        if (token) {
+            // Try to load the app with existing token
+            this.showApp();
+            await this.initApp();
+        } else {
+            // Show login page
+            this.showLogin();
+        }
 
-        // Bind refresh
-        document.getElementById('refresh-btn').addEventListener('click', () => this.refreshPrices());
-
-        // Header transaction button opens modal
-        document.getElementById('add-transaction-header-btn').addEventListener('click', () => this.openTransactionModal());
-
-        // Navigation
-        document.getElementById('nav-main').addEventListener('click', () => {
-            this.showPage('main');
-            this.loadDashboard();
-            DividendsHistogram.load(this.portfolioId);
+        // Login form handler
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            await this.handleLogin();
         });
-        document.getElementById('nav-assets').addEventListener('click', () => {
+
+        // Logout button
+        document.getElementById('logout-btn').addEventListener('click', () => {
+            this.logout();
+        });
+
+        // Economy modal close
+        const economyOverlay = document.getElementById('economy-modal-overlay');
+        const economyCloseBtn = document.getElementById('close-economy-modal');
+        if (economyCloseBtn) {
+            economyCloseBtn.addEventListener('click', () => economyOverlay.classList.add('hidden'));
+        }
+        if (economyOverlay) {
+            economyOverlay.addEventListener('click', (e) => {
+                if (e.target === economyOverlay) economyOverlay.classList.add('hidden');
+            });
+        }
+
+        // Cards open hidden tabs
+        document.getElementById('card-total').addEventListener('click', () => {
             this.showPage('assets');
-            SecuritiesManager.load(this.portfolioId);
-            // Load positions when assets page is shown
             this.loadAssetsPositions();
+            SecuritiesManager.load(this.portfolioId);
         });
-        document.getElementById('nav-operations').addEventListener('click', () => {
+        document.getElementById('card-return').addEventListener('click', () => {
             this.showPage('operations');
             TransactionsComponent.load(this.portfolioId);
         });
-        document.getElementById('nav-dividends').addEventListener('click', () => {
+        document.getElementById('card-accruals').addEventListener('click', () => {
             this.showPage('dividends');
             DividendsComponent.load(this.portfolioId);
         });
 
+        // Back buttons on hidden pages
+        document.querySelectorAll('.back-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.showPage('main');
+                this.loadDashboard();
+                DividendsHistogram.load(this.portfolioId);
+            });
+        });
+
+        // Chart mode toggle
+        document.getElementById('chart-mode-toggle').addEventListener('change', (e) => {
+            if (this.dashboardData) {
+                ChartComponent.render(this.dashboardData, e.target.checked);
+            }
+        });
+
         // Add security modal
-        document.getElementById('add-security-btn').addEventListener('click', () => this.openAddSecurityModal());
         document.getElementById('close-add-modal').addEventListener('click', () => this.closeAddSecurityModal());
         document.getElementById('cancel-add-btn').addEventListener('click', () => this.closeAddSecurityModal());
         document.getElementById('add-security-modal-overlay').addEventListener('click', (e) => {
@@ -46,6 +79,65 @@ const App = {
         // Init securities manager
         SecuritiesManager.init();
 
+        // Header transaction button opens modal
+        document.getElementById('add-transaction-header-btn').addEventListener('click', () => this.openTransactionModal());
+    },
+
+    showLogin() {
+        document.getElementById('login-page').classList.remove('hidden');
+        document.getElementById('app').classList.add('hidden');
+        document.getElementById('login-error').classList.add('hidden');
+    },
+
+    showApp() {
+        document.getElementById('login-page').classList.add('hidden');
+        document.getElementById('app').classList.remove('hidden');
+    },
+
+    async handleLogin() {
+        const username = document.getElementById('login-username').value.trim();
+        const password = document.getElementById('login-password').value;
+        const errorEl = document.getElementById('login-error');
+
+        if (!username || !password) {
+            errorEl.classList.remove('hidden');
+            return;
+        }
+
+        try {
+            const result = await API.login(username, password);
+            API.setToken(result.access_token);
+            errorEl.classList.add('hidden');
+            this.showApp();
+            // Initialize the app now that we're logged in
+            if (!this.portfolioId) {
+                await this.initApp();
+            } else {
+                await this.loadDashboard(true);
+                await DividendsHistogram.load(this.portfolioId);
+                await SecuritiesManager.load(this.portfolioId);
+            }
+        } catch (e) {
+            errorEl.classList.remove('hidden');
+            console.error('Login failed:', e);
+        }
+    },
+
+    logout() {
+        API.setToken(null);
+        this.dashboardData = null;
+        this.portfolioId = null;
+        this.showLogin();
+        // Clear form fields
+        document.getElementById('login-username').value = '';
+        document.getElementById('login-password').value = '';
+    },
+
+    async initApp() {
+        // Set current date
+        document.getElementById('current-date').textContent =
+            new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+
         // Get default portfolio
         try {
             const portfolio = await API.getDefaultPortfolio();
@@ -55,16 +147,24 @@ const App = {
             // Init modal
             await ModalComponent.init(this.portfolioId);
 
-            // Load main page
-            await this.loadDashboard();
+            // Load dashboard + histogram + securities in parallel
+            await Promise.all([
+                this.loadDashboard(),
+                DividendsHistogram.load(this.portfolioId).catch(() => {}),
+                SecuritiesManager.load(this.portfolioId).catch(() => {}),
+            ]);
 
-            // Load dividends histogram on main page
-            await DividendsHistogram.load(this.portfolioId);
-
-            // Load assets
-            await SecuritiesManager.load(this.portfolioId);
+            // Re-render chart and summary with histogram data
+            if (this.dashboardData) {
+                ChartComponent.render(this.dashboardData, document.getElementById('chart-mode-toggle')?.checked || false);
+                SummaryComponent.render(this.dashboardData);
+            }
         } catch (e) {
             console.error('Failed to initialize:', e);
+            // If token expired, go back to login
+            if (e.message && (e.message.includes('401') || e.message.includes('Необходима авторизация'))) {
+                this.logout();
+            }
             this.showError('Не удалось подключиться к серверу. Запустите бэкенд.');
         }
     },
@@ -79,15 +179,16 @@ const App = {
         }
     },
 
+    showDividends() {
+        this.showPage('dividends');
+        DividendsComponent.load(this.portfolioId);
+    },
+
     showPage(page) {
         document.getElementById('page-main').classList.toggle('hidden', page !== 'main');
         document.getElementById('page-operations').classList.toggle('hidden', page !== 'operations');
         document.getElementById('page-dividends').classList.toggle('hidden', page !== 'dividends');
         document.getElementById('page-assets').classList.toggle('hidden', page !== 'assets');
-        document.getElementById('nav-main').classList.toggle('active', page === 'main');
-        document.getElementById('nav-assets').classList.toggle('active', page === 'assets');
-        document.getElementById('nav-operations').classList.toggle('active', page === 'operations');
-        document.getElementById('nav-dividends').classList.toggle('active', page === 'dividends');
     },
 
     openAddSecurityModal() {
@@ -155,25 +256,17 @@ const App = {
     renderDashboard(data) {
         // Render all components on main page
         SummaryComponent.render(data);
-        ChartComponent.render(data);
+        ChartComponent.render(data, document.getElementById('chart-mode-toggle')?.checked || false);
         // Positions are now shown on assets page, not main page
     },
 
     async refreshPrices() {
-        const btn = document.getElementById('refresh-btn');
-        btn.textContent = '⏳';
-        btn.disabled = true;
-
         try {
             const result = await API.refreshPrices();
             console.log(`Prices refreshed: ${result.updated}`);
-            // Принудительно обновляем данные
             await this.loadDashboard(true);
         } catch (e) {
             console.error('Failed to refresh prices:', e);
-        } finally {
-            btn.textContent = '🔄';
-            btn.disabled = false;
         }
     },
 
@@ -183,6 +276,11 @@ const App = {
         await this.loadDashboard(true);
         // Also refresh dividends histogram
         await DividendsHistogram.load(this.portfolioId);
+        // Re-render chart and summary with histogram data
+        if (this.dashboardData) {
+            ChartComponent.render(this.dashboardData, document.getElementById('chart-mode-toggle')?.checked || false);
+            SummaryComponent.render(this.dashboardData);
+        }
     },
 
     openTransactionModal() {
@@ -197,6 +295,46 @@ const App = {
         });
     },
 };
+
+// Custom confirm dialog
+const ConfirmDialog = {
+    show(text) {
+        return new Promise((resolve) => {
+            const overlay = document.getElementById('confirm-overlay');
+            const textEl = document.getElementById('confirm-text');
+            const yesBtn = document.getElementById('confirm-yes');
+            const noBtn = document.getElementById('confirm-no');
+
+            textEl.textContent = text;
+            overlay.classList.remove('hidden');
+
+            const cleanup = () => {
+                overlay.classList.add('hidden');
+                yesBtn.removeEventListener('click', onYes);
+                noBtn.removeEventListener('click', onNo);
+                overlay.removeEventListener('click', onOverlay);
+            };
+            const onYes = () => { cleanup(); resolve(true); };
+            const onNo = () => { cleanup(); resolve(false); };
+            const onOverlay = (e) => { if (e.target === overlay) { cleanup(); resolve(false); } };
+
+            yesBtn.addEventListener('click', onYes);
+            noBtn.addEventListener('click', onNo);
+            overlay.addEventListener('click', onOverlay);
+        });
+    }
+};
+
+// Register Service Worker for PWA
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').then((reg) => {
+            console.log('✅ SW registered:', reg.scope);
+        }).catch((err) => {
+            console.log('❌ SW registration failed:', err);
+        });
+    });
+}
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => App.init());

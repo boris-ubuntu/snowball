@@ -3,28 +3,50 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>КотоMoney — Портфель ценных бумаг</title>
+    <meta name="theme-color" content="#00aff5">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="InvestMon€y">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="application-name" content="InvestMon€y">
+    <title>InvestMon€y — Портфель ценных бумаг</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="favicon.svg">
     <link rel="stylesheet" href="css/style.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
-    <div id="app">
+    <!-- Login Page -->
+    <div id="login-page" class="login-page">
+        <div class="login-container">
+            <div class="login-logo"><span style="color:#00aff5;font-weight:700;">InvestMon€y</span></div>
+            <div class="login-subtitle">Портфель ценных бумаг</div>
+            <form id="login-form" autocomplete="off">
+                <div class="form-group">
+                    <label for="login-username">Логин</label>
+                    <input type="text" id="login-username" placeholder="boris" required>
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Пароль</label>
+                    <input type="password" id="login-password" placeholder="********" required>
+                </div>
+                <div id="login-error" class="login-error hidden">Неверное имя пользователя или пароль</div>
+                <button type="submit" class="btn-primary btn-full" style="margin-top:8px;">🔑 Войти</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="app" class="hidden">
         <!-- Header -->
         <header>
             <div class="header-left">
-                <h1><span class="logo-cat">🐱</span> <span>КотоMoney</span></h1>
-                <nav class="header-nav">
-                    <button id="nav-main" class="nav-btn active">Главная</button>
-                    <button id="nav-assets" class="nav-btn">Активы</button>
-                    <button id="nav-operations" class="nav-btn">Операции</button>
-                    <button id="nav-dividends" class="nav-btn">Дивиденды</button>
-                </nav>
+                <h1><span style="color:#00aff5;font-weight:700;">InvestMon€y</span></h1>
             </div>
             <div class="header-right">
                 <span id="current-date"></span>
+                <button id="logout-btn" class="nav-btn">Выход</button>
                 <button id="add-transaction-header-btn" class="btn-round-add" title="Добавить сделку">+</button>
-                <button id="refresh-btn" class="icon-btn" title="Обновить цены">🔄</button>
             </div>
         </header>
 
@@ -34,20 +56,27 @@
                 <!-- Summary Cards -->
                 <section id="summary-section">
                     <div class="summary-grid">
-                        <div class="summary-card card-total">
-                            <div class="card-label">💵 Стоимость</div>
+                        <div class="summary-card card-total clickable" id="card-total">
+                            <div class="card-label">Стоимость</div>
                             <div class="card-value" id="total-value">—</div>
                             <div class="card-sub">Вложено: <span id="total-invested"></span></div>
                         </div>
-                        <div class="summary-card card-return">
-                            <div class="card-label">📈 Прибыль</div>
+                        <div class="summary-card card-return clickable" id="card-return">
+                            <div class="card-label">Прибыль</div>
                             <div class="card-value" id="total-return">—</div>
                             <div class="card-sub" id="return-sub"></div>
                         </div>
-                        <div class="summary-card card-accruals">
-                            <div class="card-label">💰 Пассивный доход</div>
+                        <div class="summary-card card-accruals clickable" id="card-accruals">
+                            <div class="card-label">Пассивный доход</div>
                             <div class="card-value" id="total-accruals">0</div>
-                            <div class="card-sub" id="accruals-percent">Ожидается за 12 мес: <span id="expected-income"></span></div>
+                            <div class="card-sub" id="accruals-sub">
+                                <span id="expected-income-label"><span id="expected-income"></span> в год</span>
+                            </div>
+                        </div>
+                        <div class="summary-card card-yield">
+                            <div class="card-label">Доходность</div>
+                            <div class="card-value" id="yield-value">—</div>
+                            <div class="card-sub" id="yield-sub"></div>
                         </div>
                     </div>
                 </section>
@@ -56,6 +85,10 @@
                 <section id="chart-section">
                     <div class="section-header">
                         <h3>Портфель</h3>
+                        <label class="chart-toggle">
+                            <input type="checkbox" id="chart-mode-toggle">
+                            <span class="toggle-slider"></span>
+                        </label>
                     </div>
                     <div class="chart-container">
                         <canvas id="composition-chart"></canvas>
@@ -65,7 +98,7 @@
                 <!-- Dividends Histogram -->
                 <section id="main-dividends-section">
                     <div class="section-header">
-                        <h3>💰 Предстоящие дивиденды и купоны</h3>
+                        <h3>Предстоящие выплаты</h3>
                         <span id="main-dividends-total" class="card-value positive" style="font-size:24.5px;line-height:36.75px;font-weight:500;"></span>
                     </div>
                     <div id="main-dividends-histogram" class="div-histogram" style="height: 260px; padding: 8px;">
@@ -78,7 +111,8 @@
             <div id="page-operations" class="hidden">
                 <section id="operations-section">
                     <div class="section-header">
-                        <h3>📋 Все операции</h3>
+                        <button class="back-btn" data-back="main">← Назад</button>
+                        <h3>Все операции</h3>
                     </div>
                     <div id="operations-list" class="operations-list">
                         <div class="loading">Загрузка...</div>
@@ -91,7 +125,8 @@
             <div id="page-dividends" class="hidden">
                 <section id="dividends-section">
                     <div class="section-header">
-                        <h3>💵 Предстоящие дивиденды</h3>
+                        <button class="back-btn" data-back="main">← Назад</button>
+                        <h3>Ожидаемые выплаты</h3>
                     </div>
                     <div id="dividends-list" class="dividends-list">
                         <div class="loading">Загрузка...</div>
@@ -104,8 +139,8 @@
                 <!-- Positions Table on Assets page -->
                 <section id="positions-section">
                     <div class="section-header">
+                        <button class="back-btn" data-back="main">← Назад</button>
                         <h3>Текущие позиции</h3>
-                        <button id="add-transaction-btn" class="btn-round-add">+</button>
                     </div>
                     <div class="table-wrapper">
                         <table id="positions-table">
@@ -119,10 +154,11 @@
                                     <th>Стоимость</th>
                                     <th>Доля</th>
                                     <th>Прибыль</th>
+                                    <th>Реализ.</th>
                                 </tr>
                             </thead>
                             <tbody id="positions-body">
-                                <tr><td colspan="8" class="loading">Загрузка...</td></tr>
+                                <tr><td colspan="9" class="loading">Загрузка...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -138,7 +174,7 @@
     <div id="modal-overlay" class="hidden">
         <div id="modal" class="modal">
             <div class="modal-header">
-                <h2>💼 Новая сделка</h2>
+                <h2>Добавить актив</h2>
                 <button id="close-modal" class="icon-btn">✕</button>
             </div>
             <form id="transaction-form" autocomplete="off">
@@ -285,6 +321,45 @@
                 <button type="submit" class="btn-primary btn-full">➕ Добавить</button>
                 <button id="cancel-add-btn" type="button" class="btn-secondary btn-full">Отмена</button>
             </form>
+        </div>
+    </div>
+
+    <!-- Economy Info Modal (click on chart center) -->
+    <div id="economy-modal-overlay" class="hidden">
+        <div class="modal economy-modal">
+            <div class="modal-header" style="border:none;margin-bottom:8px;">
+                <button id="close-economy-modal" class="icon-btn">✕</button>
+            </div>
+            <div class="economy-modal-body">
+                <div class="economy-spendable-top">
+                    <div class="economy-spendable-label">Можно тратить в месяц</div>
+                    <div class="economy-spendable-value" id="economy-spendable">—</div>
+                </div>
+                <div class="economy-divider"></div>
+                <div class="economy-row">
+                    <span class="economy-label">Ключевая ставка ЦБ</span>
+                    <span class="economy-value" id="economy-key-rate">—</span>
+                </div>
+                <div class="economy-row">
+                    <span class="economy-label">Годовая инфляция</span>
+                    <span class="economy-value" id="economy-inflation">—</span>
+                </div>
+                <div class="economy-row">
+                    <span class="economy-label">Пассивная доходность</span>
+                    <span class="economy-value positive" id="economy-passive-yield">—</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Confirm Modal -->
+    <div id="confirm-overlay" class="hidden">
+        <div class="modal confirm-modal">
+            <p id="confirm-text" class="confirm-text">Точно удалить?</p>
+            <div class="confirm-actions">
+                <button id="confirm-yes" class="btn-primary">Да</button>
+                <button id="confirm-no" class="btn-secondary">Нет</button>
+            </div>
         </div>
     </div>
 

@@ -14,6 +14,7 @@ class SecurityBase(BaseModel):
     sector: Optional[str] = None
     isin: Optional[str] = None
     exchange: str = "MOEX"
+    dohod_name: Optional[str] = None
 
 
 class SecurityCreate(SecurityBase):
@@ -29,6 +30,7 @@ class SecurityUpdate(BaseModel):
     sector: Optional[str] = None
     isin: Optional[str] = None
     exchange: Optional[str] = None
+    dohod_name: Optional[str] = None
     current_price: Optional[float] = None
 
 
@@ -47,6 +49,7 @@ class PortfolioSecurityResponse(SecurityResponse):
     quantity: float = 0
     avg_price: Optional[float] = None
     total_accruals: float = 0
+    realized_profit: float = 0
 
 
 # === Portfolio ===
@@ -91,6 +94,7 @@ class PositionResponse(BaseModel):
     quantity: float
     avg_price: Optional[float] = None
     total_accruals: float = 0
+    realized_profit: float = 0
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     security: Optional[SecurityResponse] = None
@@ -112,6 +116,15 @@ class TransactionBase(BaseModel):
 
 class TransactionCreate(TransactionBase):
     total_amount: Optional[float] = None  # Override auto-calc for accruals
+
+
+class TransactionUpdate(BaseModel):
+    quantity: Optional[float] = None
+    price: Optional[float] = None
+    commission: Optional[float] = None
+    transaction_date: Optional[date] = None
+    notes: Optional[str] = None
+    transaction_type: Optional[str] = None
 
 
 class TransactionResponse(TransactionBase):
@@ -177,6 +190,10 @@ class PortfolioSummary(BaseModel):
     expected_income_yield: float = 0  # Доходность в % от вложенных средств
     position_count: int = 0
     currency: str = "RUB"
+    # 12-month metrics for Доходность card
+    total_return_12m: float = 0  # Total profit from transactions in last 12 months
+    total_invested_12m: float = 0  # Total invested (buy) in last 12 months
+    realized_profit_12m: float = 0  # Profit from buy/sell (without accruals) in last 12 months
 
 
 class DashboardPosition(BaseModel):
@@ -191,6 +208,7 @@ class DashboardPosition(BaseModel):
     total_cost: float = 0  # Вложено
     total_value: float = 0  # Текущая стоимость
     total_accruals: float = 0  # Начислено (дивиденды, купоны)
+    realized_profit: float = 0  # Реализованная прибыль/убыток от продаж
     profit: float = 0
     profit_percent: float = 0
     share: float = 0  # Доля в портфеле

@@ -1,5 +1,6 @@
 const DividendsHistogram = {
     portfolioId: null,
+    lastMonthlyData: null,
 
     async load(portfolioId) {
         this.portfolioId = portfolioId || this.portfolioId;
@@ -11,12 +12,14 @@ const DividendsHistogram = {
         container.innerHTML = '<div class="loading">Загрузка...</div>';
 
         try {
-            const [dividends, coupons] = await Promise.all([
+            const [dividends, coupons, lqdtProjection] = await Promise.all([
                 API.getPortfolioDividends(this.portfolioId, true, false),
                 API.getPortfolioCoupons(this.portfolioId, true, false),
+                API.getLqdtProjection(this.portfolioId).catch(() => []),
             ]);
 
-            const monthlyData = this.buildMonthlyData(dividends, coupons);
+            const monthlyData = this.buildMonthlyData(dividends, coupons, lqdtProjection);
+            this.lastMonthlyData = monthlyData;
             const totalNext12Months = monthlyData.reduce((sum, m) => sum + m.total, 0);
 
             if (totalEl) {
@@ -24,13 +27,60 @@ const DividendsHistogram = {
             }
 
             container.innerHTML = this.renderHistogram(monthlyData);
+
+            // Update the passive income card with the same total as the histogram
+            this.updatePassiveIncomeCard(totalNext12Months, monthlyData, this.portfolioId);
         } catch (e) {
             container.innerHTML = '<div class="loading">⚠️ Ошибка загрузки</div>';
             console.error(e);
         }
     },
 
-    buildMonthlyData(dividends, coupons) {
+    updatePassiveIncomeCard(totalNext12Months, monthlyData, portfolioId) {
+        // Update the passive income card with histogram total (same as гистограмма header)
+        const expectedIncomeEl = document.getElementById('expected-income');
+        const totalAccrualsEl = document.getElementById('total-accruals');
+        
+        // Update expected income text
+        if (expectedIncomeEl) {
+            expectedIncomeEl.textContent = totalNext12Months > 0
+                ? Utils.formatCurrency(totalNext12Months)
+                : '—';
+        }
+
+        // Calculate yield: all upcoming payments / value of assets that have payments
+        // Collect tickers that have upcoming payments
+        const payingTickers = new Set();
+        if (monthlyData) {
+            for (const m of monthlyData) {
+                if (m.items) {
+                    for (const item of m.items) {
+                        const ticker = item.ticker || item.name;
+                        if (ticker) payingTickers.add(ticker);
+                    }
+                }
+            }
+        }
+
+        let payingValue = 0;
+        if (typeof App !== 'undefined' && App.dashboardData && App.dashboardData.positions) {
+            for (const pos of App.dashboardData.positions) {
+                if (payingTickers.has(pos.ticker)) {
+                    payingValue += pos.total_value;
+                }
+            }
+        }
+
+        // Calculate and update yield %
+        if (totalAccrualsEl) {
+            const incomeYield = payingValue > 0 ? (totalNext12Months / payingValue) * 100 : 0;
+            const prefix = incomeYield >= 0 ? '▲' : '▼';
+            totalAccrualsEl.textContent = prefix + ' ' + Utils.formatPercent(Math.abs(incomeYield));
+            totalAccrualsEl.className = 'card-value ' + (incomeYield >= 0 ? 'positive' : 'negative');
+        }
+    },
+
+    buildMonthlyData(dividends, coupons, lqdtProjection = []) {
         const now = new Date();
         now.setHours(0, 0, 0, 0);
 
@@ -65,6 +115,24 @@ const DividendsHistogram = {
             }
         }
 
+        // Merge LQDT projections - add as single monthly total, not individual days
+        if (lqdtProjection && lqdtProjection.length > 0) {
+            for (const mp of lqdtProjection) {
+                const d = new Date(mp.date);
+                const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+                if (!months[key]) {
+                    months[key] = { date: d, total: 0, items: [] };
+                }
+                months[key].total += mp.total || 0;
+                // Add one aggregated item per month instead of individual daily items
+                months[key].items.push({
+                    ticker: 'LQDT',
+                    name: 'LQDT Money Market',
+                    total_expected: mp.total || 0,
+                });
+            }
+        }
+
         const result = [];
         const currentDate = new Date(now);
 
@@ -88,6 +156,12 @@ const DividendsHistogram = {
         return result;
     },
 
+    // Format number as integer without currency symbol: 1234 → "1 234"
+    formatInt(value) {
+        if (value == null || isNaN(value)) return '';
+        return Math.round(value).toLocaleString('ru-RU');
+    },
+
     renderHistogram(monthlyData) {
         if (!monthlyData || monthlyData.length === 0) {
             return '<div class="loading">Нет предстоящих выплат</div>';
@@ -101,33 +175,59 @@ const DividendsHistogram = {
 
         const monthNames = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
         const now = new Date();
+        const isMobile = window.innerWidth < 640;
 
-        let html = '<div class="histogram-container" style="display: flex; align-items: flex-end; justify-content: space-around; gap: 8px; height: 100%; min-height: 220px; padding: 10px 0;">';
+        // Full-width: use flex:1 for each bar so they fill the entire card
+        let html = '<div class="histogram-container" style="display: flex; align-items: flex-end; justify-content: space-between; gap: 1px; height: 100%; min-height: 150px; padding: 4px 0; width: 100%;">';
 
         for (const m of monthlyData) {
             const heightPct = maxTotal > 0 ? (m.total / maxTotal) * 100 : 0;
             const monthLabel = monthNames[m.date.getMonth()];
-            const yearLabel = m.date.getFullYear();
+            const yearLabel = String(m.date.getFullYear()).slice(2);
             const isCurrentMonth = now.getMonth() === m.date.getMonth() && now.getFullYear() === m.date.getFullYear();
-
             const hasItems = m.items && m.items.length > 0;
+
             const tooltipContent = hasItems
                 ? m.items.map(i => `${i.ticker || i.name}: ${Utils.formatCurrency(i.total_expected || 0)}`).join('<br>')
-                : 'Нет выплат';
+                : '';
 
-            const barHeight = Math.max(heightPct, m.total > 0 ? 10 : 2);
+            // Wider bars with rounded corners
+            const barHeight = hasItems ? Math.max(heightPct, 8) : 2;
+            const barBg = hasItems
+                ? 'linear-gradient(180deg, var(--accent-light), var(--accent))'
+                : 'var(--bg-hover)';
+            const barOpacity = hasItems ? 1 : 0.1;
 
-            html += `<div class="histogram-bar-wrapper" style="display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 35px; height: 100%; justify-content: flex-end; position: relative;">
-                <div class="histogram-value" style="font-size: 0.65rem; font-weight: 700; color: var(--green); margin-bottom: 3px; white-space: nowrap; text-align: center;">${m.total > 0 ? Utils.formatCurrency(m.total) : '0'}</div>
+            // Value label with margin-bottom for spacing
+            const valueLabel = hasItems
+                ? `<div class="histogram-value" style="font-size: ${isMobile ? '0.5rem' : '0.55rem'}; font-weight: 600; color: #4ade80; opacity: 0.8; margin-bottom: 6px; white-space: nowrap; text-align: center; line-height: 1.1;">${this.formatInt(m.total)}</div>`
+                : '';
+
+            html += `<div class="histogram-bar-wrapper" style="display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 0; height: 100%; justify-content: flex-end; position: relative;">
+                ${valueLabel}
                 <div class="histogram-bar ${isCurrentMonth ? 'current' : ''} ${!hasItems ? 'empty' : ''}" 
-                     style="width: 100%; max-width: 40px; min-height: ${m.total > 0 ? '6px' : '3px'}; height: ${barHeight}%; background: ${hasItems ? 'linear-gradient(180deg, var(--accent-light), var(--accent))' : 'var(--bg-hover)'}; border-radius: 4px 4px 0 0; cursor: default; position: relative; transition: all 0.3s ease; opacity: ${hasItems ? 1 : 0.25};">
-                    ${hasItems ? `<div class="histogram-tooltip" style="display: none; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 0.7rem; white-space: nowrap; z-index: 10; color: var(--text-primary); margin-bottom: 4px;">${tooltipContent}</div>` : ''}
+                     style="width: ${isMobile ? '70%' : '60%'}; min-height: ${hasItems ? '4px' : '1px'}; height: ${barHeight}%; background: ${barBg}; border-radius: 3px 3px 0 0; cursor: ${hasItems ? 'pointer' : 'default'}; position: relative; transition: all 0.3s ease; opacity: ${barOpacity}; box-shadow: ${hasItems ? '0 1px 3px rgba(0,0,0,0.15)' : 'none'};">
+                    ${hasItems ? `<div class="histogram-tooltip" style="display: none; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 0.7rem; white-space: nowrap; z-index: 10; color: var(--text-primary); margin-bottom: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">${tooltipContent}</div>` : ''}
                 </div>
-                <div class="histogram-label" style="font-size: 0.6rem; color: var(--text-muted); text-align: center; margin-top: 4px; line-height: 1.2;">${monthLabel}<br>${yearLabel}</div>
+                <div class="histogram-label" style="font-size: ${isMobile ? '0.45rem' : '0.55rem'}; color: var(--text-muted); text-align: center; margin-top: 3px; line-height: 1.1;">${monthLabel}<br>${yearLabel}</div>
             </div>`;
         }
 
         html += '</div>';
+
+        // Add hover effect via CSS (injected once)
+        if (!document.getElementById('histogram-hover-style')) {
+            const style = document.createElement('style');
+            style.id = 'histogram-hover-style';
+            style.textContent = `
+                .histogram-bar:hover { opacity: 0.85 !important; transform: scaleY(1.02); transform-origin: bottom; }
+                .histogram-bar-wrapper:hover .histogram-tooltip { display: block !important; }
+                .histogram-bar { transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important; }
+                .histogram-bar.current { border: 1px solid rgba(255,255,255,0.2); }
+            `;
+            document.head.appendChild(style);
+        }
+
         return html;
     },
 };

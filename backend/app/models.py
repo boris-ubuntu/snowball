@@ -31,6 +31,7 @@ class Security(Base):
     sector = Column(String(100), nullable=True)  # Сектор экономики
     isin = Column(String(20), nullable=True)  # ISIN код
     exchange = Column(String(20), default="MOEX")  # Биржа
+    dohod_name = Column(String(255), nullable=True)  # Название для сопоставления с dohod.ru
     current_price = Column(Float, nullable=True)  # Текущая рыночная цена
     price_updated_at = Column(DateTime(timezone=True), nullable=True)  # Когда обновлена цена
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -63,6 +64,7 @@ class PortfolioPosition(Base):
     quantity = Column(Float, nullable=False, default=0)  # Текущее количество
     avg_price = Column(Float, nullable=True)  # Средняя цена покупки
     total_accruals = Column(Float, nullable=False, default=0)  # Всего начислено (дивиденды, купоны и т.д.)
+    realized_profit = Column(Float, nullable=False, default=0)  # Реализованная прибыль/убыток от продаж
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

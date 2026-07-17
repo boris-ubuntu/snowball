@@ -58,6 +58,14 @@ async def search_securities(q: str = Query("", description="Search query"), db: 
     return result
 
 
+@router.post("/load-all")
+async def load_all_securities_endpoint(db: Session = Depends(get_db)):
+    """Load all securities from MOEX (stocks, bonds, OFZ, ETF)"""
+    from ..load_moex_securities import load_all_securities as load_all, ensure_currency_securities
+    added = await load_all(db)
+    added += ensure_currency_securities(db)
+    return {"status": "ok", "added": added}
+
 @router.post("/load-ofz")
 async def load_ofz(db: Session = Depends(get_db)):
     """Load all available OFZ bonds from MOEX"""

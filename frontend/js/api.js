@@ -1,12 +1,36 @@
 const API = {
+    BASE_URL: () => CONFIG.API_BASE,
+
+    getToken() {
+        return localStorage.getItem('auth_token');
+    },
+
+    setToken(token) {
+        if (token) localStorage.setItem('auth_token', token);
+        else localStorage.removeItem('auth_token');
+    },
+
     async request(path, options = {}) {
-        const url = CONFIG.API_BASE + path;
+        const url = this.BASE_URL() + path;
+        const headers = { 'Content-Type': 'application/json', ...options.headers };
+        const token = this.getToken();
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
         const config = {
-            headers: { 'Content-Type': 'application/json', ...options.headers },
+            headers,
             ...options,
         };
         try {
             const res = await fetch(url, config);
+            if (res.status === 401 && !path.includes('/auth/')) {
+                // Token expired or invalid - redirect to login
+                API.setToken(null);
+                if (typeof App !== 'undefined' && App.logout) {
+                    App.logout();
+                }
+                return null;
+            }
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
                 throw new Error(err.detail || `HTTP ${res.status}`);
@@ -17,6 +41,20 @@ const API = {
             console.error(`API error [${options.method || 'GET'} ${path}]:`, err);
             throw err;
         }
+    },
+
+    // Auth
+    async login(username, password) {
+        const res = await fetch(this.BASE_URL() + '/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Ошибка авторизации');
+        }
+        return await res.json();
     },
 
     // Securities search + OFZ loader
@@ -74,7 +112,7 @@ const API = {
         });
     },
 
-    // Dividends - ИСПРАВЛЕНО
+    // Dividends
     getPortfolioDividends(portfolioId, showAll = true, forceRefresh = false) {
         return this.request(`/portfolio/${portfolioId}/dividends?all=${showAll}&force_refresh=${forceRefresh}`);
     },
@@ -85,7 +123,13 @@ const API = {
         return this.request(`/portfolio/${portfolioId}/process-accruals`, { method: 'POST' });
     },
 
-    // Delete transaction
+    // Update transaction
+    updateTransaction(portfolioId, transactionId, data) {
+        return this.request(`/portfolio/${portfolioId}/transactions/${transactionId}`, {
+            method: 'PUT',
+            body: JSON.stringify(data),
+        });
+    },
     deleteTransaction(portfolioId, transactionId) {
         return this.request(`/portfolio/${portfolioId}/transactions/${transactionId}`, { method: 'DELETE' });
     },
@@ -107,5 +151,15 @@ const API = {
     },
     refreshCbrRates() {
         return this.request('/rates/cbr/refresh', { method: 'POST' });
+    },
+
+    // Economy Indicators (CBR)
+    getEconomyIndicators() {
+        return this.request('/economy/indicators');
+    },
+
+    // LQDT projection
+    getLqdtProjection(portfolioId) {
+        return this.request(`/portfolio/${portfolioId}/lqdt-projection`);
     },
 };

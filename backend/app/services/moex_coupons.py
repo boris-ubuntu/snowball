@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 import logging
 from typing import List, Dict, Optional
@@ -77,14 +78,12 @@ async def get_coupons_for_ticker(db: Session, ticker: str, extrapolate: bool = T
     """
     Fetch coupon schedule for a bond/OFZ from MOEX ISS API with caching.
     """
-    # Пытаемся получить из кеша
     if not force_refresh:
         cached = get_cached_data(db, ticker, 'coupons')
         if cached is not None:
             logger.debug(f"Using cached coupons for {ticker}")
             return cached
 
-    # Если нет в кеше или нужно обновить - запрашиваем из MOEX
     urls_to_try = [
         f"{MOEX_BASE}/securities/{ticker}/bondization.json",
         f"{MOEX_BASE}/engines/stock/markets/bonds/boards/TQOB/securities/{ticker}.json",
@@ -145,7 +144,6 @@ async def get_coupons_for_ticker(db: Session, ticker: str, extrapolate: bool = T
                     if not coupon_date:
                         continue
                     
-                    # ✅ Обрабатываем дату - приводим к строке
                     if isinstance(coupon_date, datetime):
                         coupon_date = coupon_date.strftime("%Y-%m-%d")
                     
@@ -183,7 +181,6 @@ async def get_coupons_for_ticker(db: Session, ticker: str, extrapolate: bool = T
                         future = extrapolate_future_coupons(result)
                         result.extend(future)
                     
-                    # Сохраняем в кеш
                     set_cached_data(db, ticker, 'coupons', result)
                     return result
 
@@ -196,49 +193,36 @@ async def get_coupons_for_ticker(db: Session, ticker: str, extrapolate: bool = T
 
 async def get_portfolio_coupons(db: Session, portfolio_id: int, upcoming_only: bool = False, force_refresh: bool = False) -> List[Dict]:
     """
-    Get all coupons for OFZ/bond securities in a portfolio.
+    Get all coupons for OFZ/bond securities in a portfolio (parallel).
     """
     from .. import crud
 
     securities = crud.get_portfolio_securities(db, portfolio_id)
     today = date.today()
-    all_coupons = []
 
-    print(f"📊 get_portfolio_coupons: portfolio_id={portfolio_id}, securities={len(securities)}")
-
-    for sec in securities:
+    async def _fetch(sec):
         if sec.security_type not in ("bond", "ofz"):
-            print(f"   ⏭️ {sec.ticker}: не bond/ofz (тип={sec.security_type})")
-            continue
-        
+            return []
         quantity = getattr(sec, "quantity", 0)
-        print(f"   🔍 {sec.ticker}: проверяем купоны, quantity={quantity}")
-
+        if quantity <= 0:
+            return []
         try:
             coupons = await get_coupons_for_ticker(db, sec.ticker, force_refresh=force_refresh)
-            print(f"   ✅ {sec.ticker}: получено {len(coupons)} купонов")
-
+            result = []
             for coup in coupons:
                 try:
-                    # ✅ Обрабатываем дату - приводим к строке
                     coupon_date_str = coup["coupon_date"]
                     if isinstance(coupon_date_str, datetime):
                         coupon_date_str = coupon_date_str.strftime("%Y-%m-%d")
                     coup_date = datetime.strptime(coupon_date_str, "%Y-%m-%d").date()
-                except (ValueError, TypeError) as e:
-                    print(f"   ⚠️ Ошибка парсинга даты для {sec.ticker}: {e}")
+                except (ValueError, TypeError):
                     continue
-
                 if upcoming_only and coup_date < today:
                     continue
-
                 value_per_bond = coup.get("value_rub", coup.get("value", 0))
                 if value_per_bond == 0:
                     continue
-
-                total_expected = value_per_bond * quantity
-
-                all_coupons.append({
+                result.append({
                     "ticker": sec.ticker,
                     "name": sec.name,
                     "isin": coup.get("isin", ""),
@@ -247,12 +231,20 @@ async def get_portfolio_coupons(db: Session, portfolio_id: int, upcoming_only: b
                     "value_per_bond": value_per_bond,
                     "facevalue": coup.get("facevalue", 1000),
                     "quantity": quantity,
-                    "total_expected": total_expected,
+                    "total_expected": value_per_bond * quantity,
                 })
+            return result
         except Exception as e:
-            print(f"   ❌ Ошибка для {sec.ticker}: {e}")
-            continue
+            logger.debug(f"Error fetching coupons for {sec.ticker}: {e}")
+            return []
 
-    print(f"📊 Итоговое количество купонов: {len(all_coupons)}")
+    # Parallel with semaphore
+    semaphore = asyncio.Semaphore(5)
+    async def _fetch_limited(sec):
+        async with semaphore:
+            return await _fetch(sec)
+
+    results = await asyncio.gather(*[_fetch_limited(sec) for sec in securities])
+    all_coupons = [c for batch in results for c in batch]
     all_coupons.sort(key=lambda x: x["coupon_date"], reverse=True)
     return all_coupons

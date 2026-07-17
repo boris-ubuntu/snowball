@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import asyncio
+import logging
+from datetime import date, datetime
 
 from .. import schemas, crud
 from ..database import get_db
@@ -9,7 +11,22 @@ from ..services.moex_service import refresh_all_prices
 from ..services.moex_dividends import get_portfolio_dividends, get_portfolio_dividends_all
 from ..services.moex_coupons import get_portfolio_coupons
 from ..services.auto_accrual import check_and_process_accruals
-from ..load_moex_securities import load_all_securities
+from ..services.lqdt_service import get_lqdt_projection
+
+logger = logging.getLogger(__name__)
+
+
+async def _auto_accrue(db: Session, portfolio_id: int):
+    """
+    Автоматически начисляет прошедшие дивиденды и купоны, по которым уже прошла
+    дата закрытия реестра / выплаты купона и бумага на тот момент находилась в портфеле.
+    Идемпотентно: уже начисленные записи пропускаются.
+    """
+    try:
+        await check_and_process_accruals(db, portfolio_id)
+    except Exception as e:
+        logger.debug(f"Auto-accrual skipped for portfolio {portfolio_id}: {e}")
+
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
 
@@ -39,11 +56,48 @@ def get_portfolio(portfolio_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{portfolio_id}/dashboard", response_model=schemas.DashboardResponse)
-def get_dashboard(portfolio_id: int, db: Session = Depends(get_db)):
+async def get_dashboard(portfolio_id: int, db: Session = Depends(get_db)):
     portfolio = crud.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    return crud.get_dashboard(db, portfolio_id)
+    # Автоматически начисляем прошедшие выплаты при открытии дашборда
+    await _auto_accrue(db, portfolio_id)
+    # Get dashboard from cache (fast!)
+    result = await crud.get_dashboard(db, portfolio_id)
+    
+    # Kick off background refresh of prices, dividends, coupons, CBR rates
+    # This runs in background after the response is sent
+    from ..services.background_updater import (
+        refresh_all_prices_background,
+        refresh_dividends_background,
+        refresh_coupons_background,
+        refresh_cbr_rates_background,
+        refresh_economy_background,
+    )
+    
+    async def _background_refresh():
+        try:
+            # Create a new DB session for background tasks
+            from ..database import SessionLocal
+            bg_db = SessionLocal()
+            try:
+                # Run all refreshes in parallel
+                await asyncio.gather(
+                    refresh_all_prices_background(bg_db),
+                    refresh_dividends_background(bg_db, portfolio_id),
+                    refresh_coupons_background(bg_db, portfolio_id),
+                    refresh_cbr_rates_background(bg_db),
+                    refresh_economy_background(bg_db),
+                )
+            finally:
+                bg_db.close()
+        except Exception as e:
+            logger.debug(f"Background refresh error: {e}")
+    
+    # Schedule background task (fire-and-forget)
+    asyncio.create_task(_background_refresh())
+    
+    return result
 
 
 @router.get("/{portfolio_id}/securities", response_model=List[schemas.PortfolioSecurityResponse])
@@ -62,10 +116,15 @@ async def portfolio_dividends(
     force_refresh: bool = Query(False, description="Force refresh from MOEX"),
     db: Session = Depends(get_db),
 ):
-    """Get dividends for portfolio securities from MOEX"""
+    """Get dividends for portfolio securities from MOEX + dohod.ru (cache-first, with auto-refresh)"""
     portfolio = crud.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
+    # Автоматически начисляем прошедшие выплаты (дата закрытия реестра уже прошла
+    # и бумага на тот момент находилась в портфеле) — они появятся в Операциях.
+    await _auto_accrue(db, portfolio_id)
+    
+    # Use the proper API functions that handle caching (MOEX + dohod.ru merged)
     if all:
         dividends = await get_portfolio_dividends_all(db, portfolio_id, force_refresh=force_refresh)
     else:
@@ -210,9 +269,35 @@ def create_transaction(portfolio_id: int, data: schemas.TransactionCreate, db: S
     return crud.create_transaction(db, portfolio_id, data)
 
 
+@router.put("/{portfolio_id}/transactions/{transaction_id}", response_model=schemas.TransactionResponse)
+def update_transaction(portfolio_id: int, transaction_id: int, data: schemas.TransactionUpdate, db: Session = Depends(get_db)):
+    transaction = crud.get_transaction(db, transaction_id)
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    updated = crud.update_transaction(db, transaction_id, data)
+    return updated
+
+
 @router.delete("/{portfolio_id}/transactions/{transaction_id}", status_code=204)
 def delete_transaction(portfolio_id: int, transaction_id: int, db: Session = Depends(get_db)):
     transaction = crud.get_transaction(db, transaction_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
     crud.delete_transaction(db, transaction_id)
+
+
+@router.delete("/{portfolio_id}/transactions/by-security/{security_id}", status_code=200)
+def delete_transactions_by_security(portfolio_id: int, security_id: int, db: Session = Depends(get_db)):
+    """Delete all transactions and position for a security in a portfolio."""
+    deleted = crud.delete_transactions_by_security(db, portfolio_id, security_id)
+    return {"deleted": deleted, "status": "ok"}
+
+
+@router.get("/{portfolio_id}/lqdt-projection")
+async def portfolio_lqdt_projection(portfolio_id: int, db: Session = Depends(get_db)):
+    """Get projected LQDT accruals for the next 12 months for the histogram."""
+    portfolio = crud.get_portfolio(db, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    projection = await get_lqdt_projection(db, portfolio_id)
+    return projection

@@ -38,8 +38,12 @@ async def fetch_cbr_rates() -> Dict[str, float]:
     Rate is how many RUB for 1 unit of the currency.
     """
     try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Snowball/1.0",
+            "Accept": "application/xml, text/xml, */*",
+        }
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(CBR_URL)
+            resp = await client.get(CBR_URL, headers=headers)
             if resp.status_code != 200:
                 logger.warning(f"CBR returned status {resp.status_code}")
                 return _get_default_rates()
@@ -76,10 +80,10 @@ async def fetch_cbr_rates() -> Dict[str, float]:
 
 
 def _get_default_rates() -> Dict[str, float]:
-    """Fallback rates if CBR is unavailable (approximate)"""
+    """Fallback rates if CBR is unavailable (approximate, last-resort values)."""
     return {
-        "USD": 88.0,
-        "EUR": 96.0,
+        "USD": 90.0,
+        "EUR": 98.0,
         "CNY": 12.0,
         "AED": 24.0,
         "RUB": 1.0,
