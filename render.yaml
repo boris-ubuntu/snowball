@@ -1,4 +1,6 @@
 # Render Blueprint for Snowball
+# Uses Neon for free PostgreSQL (no credit card needed)
+# Sign up at https://neon.tech, create a free database, copy the connection string
 services:
   - type: web
     name: snowball
@@ -7,25 +9,9 @@ services:
     dockerfilePath: ./backend/Dockerfile
     dockerContext: .
     envVars:
-      - key: DB_HOST
-        value: snowball-db
-      - key: DB_PORT
-        value: "5432"
-      - key: DB_NAME
-        value: snowball
-      - key: DB_USER
-        value: snowball
-      - key: DB_PASS
-        fromDatabase:
-          name: snowball-db
-          property: password
+      - key: DATABASE_URL
+        sync: false
       - key: SECRET_KEY
         generateValue: true
     healthCheckPath: /api/health
     autoDeploy: true
-
-databases:
-  - name: snowball-db
-    databaseName: snowball
-    user: snowball
-    plan: free
