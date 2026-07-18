@@ -24,25 +24,43 @@ async def _refresh_single_price(db: Session, ticker: str, security_type: Optiona
 
 
 async def refresh_all_prices_background(db: Session):
-    """Refresh prices for all securities with positions (background task)."""
+    """Refresh prices for securities with positions whose price is stale (background task).
+
+    Only refreshes securities that have no recent price (older than PRICE_MAX_AGE),
+    so we don't hammer MOEX on every background cycle for already-fresh data.
+    """
     from .. import models
-    
+    from datetime import datetime, timedelta
+
+    PRICE_MAX_AGE = timedelta(minutes=10)
+
+    now = datetime.utcnow()
     securities = (
         db.query(models.Security)
         .join(models.PortfolioPosition, models.PortfolioPosition.security_id == models.Security.id)
         .all()
     )
-    
-    logger.info(f"🔄 Background: refreshing prices for {len(securities)} securities")
-    
+
+    # Keep only securities whose price is missing or older than the max age
+    stale = [
+        sec for sec in securities
+        if sec.price_updated_at is None or (now - sec.price_updated_at) > PRICE_MAX_AGE
+    ]
+
+    if not stale:
+        logger.info("🔄 Background: all prices fresh, skipping price refresh")
+        return
+
+    logger.info(f"🔄 Background: refreshing prices for {len(stale)}/{len(securities)} stale securities")
+
     # Batch: process up to 5 simultaneously
     semaphore = asyncio.Semaphore(5)
-    
+
     async def _refresh(sec):
         async with semaphore:
             await _refresh_single_price(db, sec.ticker, sec.security_type, sec.isin)
-    
-    tasks = [_refresh(sec) for sec in securities]
+
+    tasks = [_refresh(sec) for sec in stale]
     await asyncio.gather(*tasks)
     
     # Commit prices to database
@@ -71,7 +89,7 @@ async def _refresh_dividends_for_ticker(db: Session, ticker: str):
     """Refresh dividends for a single ticker."""
     from .moex_dividends import get_dividends_for_ticker
     try:
-        await get_dividends_for_ticker(db, ticker, force_refresh=True)
+        await get_dividends_for_ticker(db, ticker, force_refresh=False)
     except Exception as e:
         logger.debug(f"Background dividends refresh failed for {ticker}: {e}")
 
@@ -85,11 +103,12 @@ async def refresh_dividends_background(db: Session, portfolio_id: int):
     securities = crud.get_portfolio_securities(db, portfolio_id)
     logger.info(f"🔄 Background: refreshing dividends for {len(securities)} securities")
     
-    # 1. Refresh dohod.ru dividends (primary source for future dividends)
+    # 1. Refresh dohod.ru dividends (primary source for future dividends).
+    #    Respect the 24h cache TTL — skip the heavy HTML scrape if cache is fresh.
     try:
         from .dohod_service import fetch_dohod_dividends
-        await fetch_dohod_dividends(db, force_refresh=True)
-        logger.info("✅ Background: dohod.ru dividends refreshed")
+        await fetch_dohod_dividends(db, force_refresh=False)
+        logger.info("✅ Background: dohod.ru dividends refreshed (or served from cache)")
     except Exception as e:
         logger.debug(f"Background dohod.ru refresh failed: {e}")
     
@@ -109,7 +128,7 @@ async def _refresh_coupons_for_ticker(db: Session, ticker: str):
     """Refresh coupons for a single ticker."""
     from .moex_coupons import get_coupons_for_ticker
     try:
-        await get_coupons_for_ticker(db, ticker, force_refresh=True)
+        await get_coupons_for_ticker(db, ticker, force_refresh=False)
     except Exception as e:
         logger.debug(f"Background coupons refresh failed for {ticker}: {e}")
 
@@ -134,7 +153,11 @@ async def refresh_coupons_background(db: Session, portfolio_id: int):
 
 
 async def refresh_cbr_rates_background(db: Session):
-    """Refresh CBR exchange rates (background)."""
+    """Refresh CBR exchange rates (background). Skip if cache is fresh (24h TTL)."""
+    from .cache_service import get_cached_data
+    if get_cached_data(db, "CBR_ALL", "cbr_rates") is not None:
+        logger.info("🔄 Background: CBR rates cache fresh, skipping")
+        return
     try:
         from .cbr_service import fetch_cbr_rates
         rates = await fetch_cbr_rates()
@@ -148,7 +171,11 @@ async def refresh_cbr_rates_background(db: Session):
 
 
 async def refresh_economy_background(db: Session):
-    """Refresh economy indicators from CBR (background)."""
+    """Refresh economy indicators from CBR (background). Skip if cache is fresh (24h TTL)."""
+    from .cache_service import get_cached_data
+    if get_cached_data(db, "ECONOMY", "economy") is not None:
+        logger.info("🔄 Background: economy indicators cache fresh, skipping")
+        return
     try:
         from .cbr_economy import fetch_economy_indicators
         indicators = await fetch_economy_indicators()
