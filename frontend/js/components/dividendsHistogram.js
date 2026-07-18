@@ -30,7 +30,7 @@ const DividendsHistogram = {
         // Fetch fresh data in background (non-blocking for UI) - this populates the cache
         try {
             const [dividends, coupons, lqdtProjection] = await Promise.all([
-                API.getPortfolioDividends(this.portfolioId, true, false).catch(() => []),
+                API.getPortfolioDividends(this.portfolioId, false, false).catch(() => []),
                 API.getPortfolioCoupons(this.portfolioId, true, false).catch(() => []),
                 API.getLqdtProjection(this.portfolioId).catch(() => []),
             ]);

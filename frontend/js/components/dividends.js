@@ -10,15 +10,19 @@ const DividendsComponent = {
         if (!this.portfolioId) return;
 
         try {
+            // This page shows only upcoming payments, so request upcoming-only.
+            // The backend filters by registry/coupon date >= today, returning a
+            // much smaller payload (no full dividend history). On miss we still
+            // fall back to a force-refresh.
             const [dividends, coupons] = await Promise.all([
-                API.getPortfolioDividends(this.portfolioId, true, false),
+                API.getPortfolioDividends(this.portfolioId, false, false),
                 API.getPortfolioCoupons(this.portfolioId, true, false),
             ]);
-            
+
             if ((!dividends || dividends.length === 0) && (!coupons || coupons.length === 0)) {
                 container.innerHTML = '<div class="loading">Загрузка данных с MOEX...</div>';
                 const [dividendsFresh, couponsFresh] = await Promise.all([
-                    API.getPortfolioDividends(this.portfolioId, true, true),
+                    API.getPortfolioDividends(this.portfolioId, false, true),
                     API.getPortfolioCoupons(this.portfolioId, true, true),
                 ]);
                 this.render(dividendsFresh, couponsFresh);

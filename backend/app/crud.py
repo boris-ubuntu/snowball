@@ -739,35 +739,23 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
         logger.error(f"Error calculating expected annual income: {e}")
 
     # === Calculate 12-month metrics ===
+    # NOTE: reuse the already-loaded `all_txns` list instead of hitting the DB a
+    # third time. This removes a second full-table scan and a second FIFO pass.
     twelve_months_ago = date.today() - timedelta(days=365)
-    txns_12m = db.query(models.Transaction).filter(
-        models.Transaction.portfolio_id == portfolio_id,
-        models.Transaction.transaction_date >= twelve_months_ago,
-    ).all()
 
     total_invested_12m = 0  # total spent on buys in last 12 months
     total_sold_12m = 0      # total revenue from sells in last 12 months
     total_accruals_12m = 0  # total accruals in last 12 months
     realized_profit_12m = 0 # profit from buy/sell (without accruals) in last 12 months
-    
-    # Also calculate 12-month passive income from dividends/coupons in MOEX data
-    passive_income_12m = 0
-
-    # Recalculate realized P&L for 12 months using FIFO but only for sales in this period
-    # We need buys before the period too for cost basis
-    all_txns_12m_with_prior = db.query(models.Transaction).filter(
-        models.Transaction.portfolio_id == portfolio_id,
-        models.Transaction.transaction_date <= date.today(),
-    ).order_by(models.Transaction.transaction_date, models.Transaction.id).all()
 
     sec_buys_12m = defaultdict(list)
     sec_realized_12m = defaultdict(float)
 
-    for tx in all_txns_12m_with_prior:
+    for tx in all_txns:
         if tx.transaction_type == "buy":
             sec_buys_12m[tx.security_id].append((tx.quantity, tx.price))
         elif tx.transaction_type == "sell":
-            # Only count sales within the 12-month window
+            # Only count sales within the 12-month window for realized profit
             if tx.transaction_date < twelve_months_ago:
                 # Still consume buys for cost basis, but don't count realized profit
                 remaining_sell = tx.quantity
@@ -799,12 +787,11 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
         elif tx.transaction_type == "accrual" and tx.transaction_date >= twelve_months_ago:
             total_accruals_12m += tx.total_amount
 
-    # 12-month total invested = sum of all buy transactions in the period
-    total_invested_12m = db.query(func.sum(models.Transaction.total_amount)).filter(
-        models.Transaction.portfolio_id == portfolio_id,
-        models.Transaction.transaction_type == "buy",
-        models.Transaction.transaction_date >= twelve_months_ago,
-    ).scalar() or 0
+    # 12-month total invested = sum of all buy transactions in the period (in-memory)
+    total_invested_12m = sum(
+        tx.total_amount for tx in all_txns
+        if tx.transaction_type == "buy" and tx.transaction_date >= twelve_months_ago
+    )
 
     realized_profit_12m = sum(sec_realized_12m.values())
     total_return_12m = total_accruals_12m + realized_profit_12m

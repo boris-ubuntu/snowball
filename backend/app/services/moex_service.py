@@ -209,9 +209,8 @@ async def refresh_all_prices(db: Session) -> int:
                 print(f"❌ Не удалось получить цену для {sec.ticker}")
                 logger.warning(f"❌ Не удалось получить цену для {sec.ticker}")
 
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.05)
         except Exception as e:
-            print(f"❌ Ошибка обновления для {sec.ticker}: {e}")
             logger.error(f"❌ Ошибка обновления для {sec.ticker}: {e}")
             continue
 

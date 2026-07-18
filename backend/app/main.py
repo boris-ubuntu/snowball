@@ -60,7 +60,15 @@ def on_startup():
             try:
                 import asyncio
                 db = SessionLocal()
-                asyncio.run(load_all_securities(db))
+                # Skip the heavy full-MOEX load on restarts once the DB is already
+                # populated (seed.py + critical securities). This keeps startup fast;
+                # the full catalog can still be loaded on demand via
+                # POST /api/securities/load-all.
+                count = db.query(models.Security).count()
+                if count < 100:
+                    asyncio.run(load_all_securities(db))
+                else:
+                    print(f"ℹ️ {count} securities already present, skipping full MOEX load")
                 from .load_moex_securities import ensure_currency_securities
                 ensure_currency_securities(db)
                 db.close()
