@@ -476,17 +476,17 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
         models.Transaction.transaction_type == "accrual",
     ).scalar() or 0
     
-    # Fetch CBR exchange rates for currency conversion
+    # Fetch CBR exchange rates for currency conversion.
+    # IMPORTANT: never block the dashboard request on a network call. Use the
+    # cached rates if available; otherwise fall back to last-known/default rates
+    # immediately. The background refresh task populates fresh rates shortly after.
     from .services.cache_service import get_cached_data
     cached_rates = get_cached_data(db, "CBR_ALL", "cbr_rates")
     if cached_rates:
         cbr_rates = {r["currency"]: r["rate"] for r in cached_rates}
     else:
-        from .services.cbr_service import fetch_cbr_rates, convert_to_rub
-        try:
-            cbr_rates = await fetch_cbr_rates()
-        except Exception:
-            cbr_rates = {"RUB": 1.0, "USD": 90.0, "EUR": 98.0, "CNY": 12.0, "AED": 24.0}
+        # No cache yet (e.g. fresh deploy) — use safe defaults, no await.
+        cbr_rates = {"RUB": 1.0, "USD": 90.0, "EUR": 98.0, "CNY": 12.0, "AED": 24.0}
     
     total_invested = 0  # in RUB
     total_value = 0  # in RUB

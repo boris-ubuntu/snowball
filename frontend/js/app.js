@@ -159,6 +159,9 @@ const App = {
                 ChartComponent.render(this.dashboardData, document.getElementById('chart-mode-toggle')?.checked || false);
                 SummaryComponent.render(this.dashboardData);
             }
+
+            // Подтягиваем свежие цены/курсы после фонового обновления на бэкенде
+            this.scheduleDashboardSync();
         } catch (e) {
             console.error('Failed to initialize:', e);
             // If token expired, go back to login
@@ -251,6 +254,39 @@ const App = {
             console.error('Failed to load dashboard:', e);
             this.showError('Ошибка загрузки данных. Проверьте подключение к серверу.');
         }
+    },
+
+    // После первой загрузки бэкенд обновляет цены/курсы в фоне (MOEX, ЦБ РФ).
+    // Чтобы пользователь видел свежие значения без ручного F5, подтягиваем
+    // дашборд ещё несколько раз с возрастающей задержкой, но только если
+    // открыта главная страница и данные ещё «не дозрели» (есть позиции без цены).
+    scheduleDashboardSync() {
+        if (this._syncTimer) return; // уже запланировано
+        this._syncAttempts = 0;
+        const delays = [2500, 5000, 8000]; // мс
+        const tick = async () => {
+            if (this._syncAttempts >= delays.length) {
+                this._syncTimer = null;
+                return;
+            }
+            const delay = delays[this._syncAttempts];
+            this._syncAttempts += 1;
+            this._syncTimer = setTimeout(async () => {
+                try {
+                    const data = await API.getDashboard(this.portfolioId);
+                    this.dashboardData = data;
+                    // Перерисовываем только если пользователь на главной
+                    if (!document.getElementById('page-main').classList.contains('hidden')) {
+                        this.renderDashboard(data);
+                    }
+                } catch (e) {
+                    // игнорируем ошибки фоновой синхронизации
+                } finally {
+                    tick();
+                }
+            }, delay);
+        };
+        tick();
     },
 
     renderDashboard(data) {
