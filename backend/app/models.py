@@ -59,8 +59,8 @@ class PortfolioPosition(Base):
     __tablename__ = "portfolio_positions"
 
     id = Column(Integer, primary_key=True, index=True)
-    portfolio_id = Column(Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False)
-    security_id = Column(Integer, ForeignKey("securities.id", ondelete="CASCADE"), nullable=False)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False, index=True)
+    security_id = Column(Integer, ForeignKey("securities.id", ondelete="CASCADE"), nullable=False, index=True)
     quantity = Column(Float, nullable=False, default=0)  # Текущее количество
     avg_price = Column(Float, nullable=True)  # Средняя цена покупки
     total_accruals = Column(Float, nullable=False, default=0)  # Всего начислено (дивиденды, купоны и т.д.)
@@ -76,14 +76,14 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id = Column(Integer, primary_key=True, index=True)
-    portfolio_id = Column(Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False)
-    security_id = Column(Integer, ForeignKey("securities.id", ondelete="CASCADE"), nullable=False)
-    transaction_type = Column(String(10), nullable=False)  # buy / sell / accrual
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False, index=True)
+    security_id = Column(Integer, ForeignKey("securities.id", ondelete="CASCADE"), nullable=False, index=True)
+    transaction_type = Column(String(10), nullable=False, index=True)  # buy / sell / accrual
     quantity = Column(Float, nullable=False)
     price = Column(Float, nullable=False)  # Цена за единицу
     total_amount = Column(Float, nullable=False)  # Общая сумма
     commission = Column(Float, default=0)  # Комиссия
-    transaction_date = Column(Date, nullable=False)
+    transaction_date = Column(Date, nullable=False, index=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -95,12 +95,12 @@ class Dividend(Base):
     __tablename__ = "dividends"
 
     id = Column(Integer, primary_key=True, index=True)
-    security_id = Column(Integer, ForeignKey("securities.id", ondelete="CASCADE"), nullable=False)
+    security_id = Column(Integer, ForeignKey("securities.id", ondelete="CASCADE"), nullable=False, index=True)
     dividend_type = Column(String(20), nullable=False, default="dividend")  # dividend / coupon
     amount_per_share = Column(Float, nullable=False)  # На одну бумагу
     total_amount = Column(Float, nullable=True)  # Общая сумма (если известно)
-    ex_date = Column(Date, nullable=True)  # Дата отсечки
-    payment_date = Column(Date, nullable=True)  # Дата выплаты
+    ex_date = Column(Date, nullable=True, index=True)  # Дата отсечки
+    payment_date = Column(Date, nullable=True, index=True)  # Дата выплаты
     declared_date = Column(Date, nullable=True)  # Дата объявления
     tax_rate = Column(Float, default=0.13)  # Ставка налога
     notes = Column(Text, nullable=True)
@@ -113,8 +113,8 @@ class PortfolioSnapshot(Base):
     __tablename__ = "portfolio_snapshots"
 
     id = Column(Integer, primary_key=True, index=True)
-    portfolio_id = Column(Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False)
-    snapshot_date = Column(Date, nullable=False)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False, index=True)
+    snapshot_date = Column(Date, nullable=False, index=True)
     total_value = Column(Float, nullable=False)  # Общая стоимость портфеля
     total_invested = Column(Float, nullable=False)  # Всего вложено
     total_return = Column(Float, nullable=False)  # Абсолютная доходность

@@ -9,6 +9,8 @@ const ModalComponent = {
     },
 
     async loadSecurities() {
+        // Skip re-fetch if we already have securities (API layer caches them for 5 min).
+        if (this.securities && this.securities.length > 0) return;
         try {
             this.securities = await API.getSecurities();
             console.log(`📊 Загружено ${this.securities.length} бумаг для поиска`);

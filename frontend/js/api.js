@@ -43,6 +43,42 @@ const API = {
         }
     },
 
+    // --- Lightweight client-side TTL cache (localStorage) ---
+    // Used for expensive read endpoints to avoid re-fetching on every render.
+    _cacheGet(path, ttlMs) {
+        const key = 'api_cache:' + path;
+        try {
+            const raw = localStorage.getItem(key);
+            if (raw) {
+                const entry = JSON.parse(raw);
+                if (Date.now() - entry.t < ttlMs) {
+                    return entry.v;
+                }
+            }
+        } catch (e) { /* ignore cache errors */ }
+        return null;
+    },
+
+    _cacheSet(path, value) {
+        const key = 'api_cache:' + path;
+        try {
+            localStorage.setItem(key, JSON.stringify({ t: Date.now(), v: value }));
+        } catch (e) { /* ignore quota errors */ }
+    },
+
+    async cachedGet(path, ttlMs = 60000) {
+        const cached = this._cacheGet(path, ttlMs);
+        if (cached !== null) return cached;
+        const value = await this.request(path);
+        if (value !== null) this._cacheSet(path, value);
+        return value;
+    },
+
+    // Invalidate a cached GET (by exact path) — call after mutations.
+    invalidateCache(path) {
+        try { localStorage.removeItem('api_cache:' + path); } catch (e) {}
+    },
+
     // Auth
     async login(username, password) {
         const res = await fetch(this.BASE_URL() + '/auth/login', {
@@ -67,7 +103,8 @@ const API = {
 
     // Securities
     getSecurities() {
-        return this.request('/securities/?limit=1000');
+        // Securities rarely change within a session — cache for 5 minutes.
+        return this.cachedGet('/securities/?limit=1000', 5 * 60 * 1000);
     },
     getSecurity(id) {
         return this.request(`/securities/${id}`);
@@ -114,6 +151,7 @@ const API = {
 
     // Dividends
     getPortfolioDividends(portfolioId, showAll = true, forceRefresh = false) {
+        if (forceRefresh) this.invalidateCache(`/portfolio/${portfolioId}/dividends?all=${showAll}&force_refresh=false`);
         return this.request(`/portfolio/${portfolioId}/dividends?all=${showAll}&force_refresh=${forceRefresh}`);
     },
     getPortfolioCoupons(portfolioId, upcomingOnly = false, forceRefresh = false) {
@@ -147,15 +185,16 @@ const API = {
 
     // Exchange Rates (CBR)
     getCbrRates() {
-        return this.request('/rates/cbr');
+        return this.cachedGet('/rates/cbr', 10 * 60 * 1000);
     },
     refreshCbrRates() {
+        this.invalidateCache('/rates/cbr');
         return this.request('/rates/cbr/refresh', { method: 'POST' });
     },
 
     // Economy Indicators (CBR)
     getEconomyIndicators() {
-        return this.request('/economy/indicators');
+        return this.cachedGet('/economy/indicators', 10 * 60 * 1000);
     },
 
     // LQDT projection
