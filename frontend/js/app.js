@@ -257,36 +257,30 @@ const App = {
     },
 
     // После первой загрузки бэкенд обновляет цены/курсы в фоне (MOEX, ЦБ РФ).
-    // Чтобы пользователь видел свежие значения без ручного F5, подтягиваем
-    // дашборд ещё несколько раз с возрастающей задержкой, но только если
-    // открыта главная страница и данные ещё «не дозрели» (есть позиции без цены).
+    // Один отложенный перезапрос, чтобы подхватить свежие цены, НО без мерцания:
+    // не перерисовываем, если новые данные хуже (например, total_value упал до 0
+    // из-за ещё не обновлённых цен). Это убирает эффект «то 0.00, то значения».
     scheduleDashboardSync() {
         if (this._syncTimer) return; // уже запланировано
-        this._syncAttempts = 0;
-        const delays = [2500, 5000, 8000]; // мс
-        const tick = async () => {
-            if (this._syncAttempts >= delays.length) {
-                this._syncTimer = null;
-                return;
-            }
-            const delay = delays[this._syncAttempts];
-            this._syncAttempts += 1;
-            this._syncTimer = setTimeout(async () => {
-                try {
-                    const data = await API.getDashboard(this.portfolioId);
+        const delay = 4000; // мс — ждём, пока фоновое обновление отработает
+        this._syncTimer = setTimeout(async () => {
+            this._syncTimer = null;
+            try {
+                const data = await API.getDashboard(this.portfolioId);
+                const newTotal = data && data.portfolio ? data.portfolio.total_value : 0;
+                const oldTotal = this.dashboardData && this.dashboardData.portfolio
+                    ? this.dashboardData.portfolio.total_value : 0;
+                // Не перезаписываем хорошие данные нулями (цены ещё не подгрузились)
+                if (newTotal > 0 || oldTotal === 0) {
                     this.dashboardData = data;
-                    // Перерисовываем только если пользователь на главной
                     if (!document.getElementById('page-main').classList.contains('hidden')) {
                         this.renderDashboard(data);
                     }
-                } catch (e) {
-                    // игнорируем ошибки фоновой синхронизации
-                } finally {
-                    tick();
                 }
-            }, delay);
-        };
-        tick();
+            } catch (e) {
+                // игнорируем ошибки фоновой синхронизации
+            }
+        }, delay);
     },
 
     renderDashboard(data) {

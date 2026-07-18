@@ -2,12 +2,19 @@ const DividendsComponent = {
     portfolioId: null,
     showHistory: false,
 
-    async load(portfolioId) {
+    async load(portfolioId, force = false) {
         this.portfolioId = portfolioId || this.portfolioId;
         const container = document.getElementById('dividends-list');
-        container.innerHTML = '<div class="loading">Загрузка данных...</div>';
 
         if (!this.portfolioId) return;
+
+        // Кеш: при возврате на страницу не перезапрашиваем MOEX, если уже загружено
+        if (!force && this._loadedFor === this.portfolioId && this._lastData) {
+            this.render(this._lastData.dividends, this._lastData.coupons);
+            return;
+        }
+
+        container.innerHTML = '<div class="loading">Загрузка данных...</div>';
 
         try {
             // This page shows only upcoming payments, so request upcoming-only.
@@ -25,8 +32,12 @@ const DividendsComponent = {
                     API.getPortfolioDividends(this.portfolioId, false, true),
                     API.getPortfolioCoupons(this.portfolioId, true, true),
                 ]);
+                this._lastData = { dividends: dividendsFresh, coupons: couponsFresh };
+                this._loadedFor = this.portfolioId;
                 this.render(dividendsFresh, couponsFresh);
             } else {
+                this._lastData = { dividends, coupons };
+                this._loadedFor = this.portfolioId;
                 this.render(dividends, coupons);
             }
         } catch (e) {

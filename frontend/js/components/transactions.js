@@ -4,19 +4,30 @@ const TransactionsComponent = {
     pageSize: 10,
     totalLoaded: 0,
 
-    async load(portfolioId, page = 0) {
+    async load(portfolioId, page = 0, force = false) {
         this.portfolioId = portfolioId || this.portfolioId;
         this.currentPage = page;
         const container = document.getElementById('operations-list');
-        container.innerHTML = '<div class="loading">Загрузка...</div>';
 
         if (!this.portfolioId) return;
+
+        // Кеш: при возврате на страницу не перезапрашиваем, если уже загружено (стр. 0)
+        if (!force && page === 0 && this._loadedFor === this.portfolioId && this._lastTransactions) {
+            this.render(this._lastTransactions);
+            return;
+        }
+
+        container.innerHTML = '<div class="loading">Загрузка...</div>';
 
         try {
             const skip = this.currentPage * this.pageSize;
             const limit = this.pageSize + 1; // Load one extra to check if more pages exist
             const transactions = await API.getTransactions(this.portfolioId, skip, limit);
             this.totalLoaded = transactions.length;
+            if (page === 0) {
+                this._lastTransactions = transactions;
+                this._loadedFor = this.portfolioId;
+            }
             this.render(transactions);
         } catch (e) {
             container.innerHTML = '<div class="loading">⚠️ Ошибка загрузки</div>';
@@ -196,7 +207,7 @@ const TransactionsComponent = {
                 await API.updateTransaction(this.portfolioId, txId, data);
                 overlay.remove();
                 // Reload the page and refresh dashboard with recalculated positions
-                this.load(null, this.currentPage);
+                this.load(null, this.currentPage, true);
                 // Clear dashboard cache and refresh
                 if (typeof App !== 'undefined') {
                     App.dashboardData = null;
@@ -233,7 +244,7 @@ const TransactionsComponent = {
                     try {
                         await API.deleteTransaction(this.portfolioId, txId);
                         overlay.remove();
-                        this.load(null, this.currentPage);
+                        this.load(null, this.currentPage, true);
                         // Clear dashboard cache and refresh
                         if (typeof App !== 'undefined') {
                             App.dashboardData = null;

@@ -28,6 +28,23 @@ async def _auto_accrue(db: Session, portfolio_id: int):
         logger.debug(f"Auto-accrual skipped for portfolio {portfolio_id}: {e}")
 
 
+# Throttle the heavy background refresh so it does not run on every dashboard
+# request (which would hammer MOEX/CBR on every page load, especially on small
+# Render/Neon deployments). One full refresh per process per REFRESH_INTERVAL.
+import time
+_LAST_BG_REFRESH = 0.0
+_BG_REFRESH_INTERVAL = 300.0  # seconds
+
+
+def _should_run_background_refresh() -> bool:
+    global _LAST_BG_REFRESH
+    now = time.monotonic()
+    if now - _LAST_BG_REFRESH >= _BG_REFRESH_INTERVAL:
+        _LAST_BG_REFRESH = now
+        return True
+    return False
+
+
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
 
 
@@ -64,37 +81,41 @@ async def get_dashboard(portfolio_id: int, db: Session = Depends(get_db)):
     result = await crud.get_dashboard(db, portfolio_id)
     
     # Kick off background refresh of prices, dividends, coupons, CBR rates, and auto-accruals
-    # This runs in background after the response is sent
-    from ..services.background_updater import (
-        refresh_all_prices_background,
-        refresh_dividends_background,
-        refresh_coupons_background,
-        refresh_cbr_rates_background,
-        refresh_economy_background,
-    )
-    
-    async def _background_refresh():
-        try:
-            from ..database import SessionLocal
-            bg_db = SessionLocal()
+    # This runs in background after the response is sent. Throttled so it does not
+    # fire on every request (keeps the deployed instance responsive).
+    if _should_run_background_refresh():
+        from ..services.background_updater import (
+            refresh_all_prices_background,
+            refresh_dividends_background,
+            refresh_coupons_background,
+            refresh_cbr_rates_background,
+            refresh_economy_background,
+        )
+        
+        async def _background_refresh():
             try:
-                # Run all refreshes in parallel
-                await asyncio.gather(
-                    refresh_all_prices_background(bg_db),
-                    refresh_dividends_background(bg_db, portfolio_id),
-                    refresh_coupons_background(bg_db, portfolio_id),
-                    refresh_cbr_rates_background(bg_db),
-                    refresh_economy_background(bg_db),
-                )
-                # Auto-accruals in background (non-blocking)
-                await _auto_accrue(bg_db, portfolio_id)
-            finally:
-                bg_db.close()
-        except Exception as e:
-            logger.debug(f"Background refresh error: {e}")
-    
-    # Schedule background task (fire-and-forget)
-    asyncio.create_task(_background_refresh())
+                from ..database import SessionLocal
+                bg_db = SessionLocal()
+                try:
+                    # Run all refreshes in parallel
+                    await asyncio.gather(
+                        refresh_all_prices_background(bg_db),
+                        refresh_dividends_background(bg_db, portfolio_id),
+                        refresh_coupons_background(bg_db, portfolio_id),
+                        refresh_cbr_rates_background(bg_db),
+                        refresh_economy_background(bg_db),
+                    )
+                    # Auto-accruals in background (non-blocking)
+                    await _auto_accrue(bg_db, portfolio_id)
+                finally:
+                    bg_db.close()
+            except Exception as e:
+                logger.debug(f"Background refresh error: {e}")
+        
+        # Schedule background task (fire-and-forget)
+        asyncio.create_task(_background_refresh())
+    else:
+        logger.debug("Background refresh skipped (throttled)")
     
     return result
 

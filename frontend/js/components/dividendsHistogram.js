@@ -2,12 +2,21 @@ const DividendsHistogram = {
     portfolioId: null,
     lastMonthlyData: null,
 
-    async load(portfolioId) {
+    async load(portfolioId, force = false) {
         this.portfolioId = portfolioId || this.portfolioId;
         const container = document.getElementById('main-dividends-histogram');
         const totalEl = document.getElementById('main-dividends-total');
 
         if (!container || !this.portfolioId) return;
+
+        // Кеш: при возврате на главную не перезапрашиваем MOEX, если уже построено
+        if (!force && this._loadedFor === this.portfolioId && this.lastMonthlyData) {
+            const cachedTotal = this.lastMonthlyData.reduce((s, m) => s + m.total, 0);
+            if (totalEl && cachedTotal > 0) totalEl.textContent = Utils.formatCurrency(cachedTotal);
+            container.innerHTML = this.renderHistogram(this.lastMonthlyData);
+            if (cachedTotal > 0) this.updatePassiveIncomeCard(cachedTotal, this.lastMonthlyData, this.portfolioId);
+            return;
+        }
 
         // Use dashboard cached data immediately (instant display)
         const hasCache = typeof App !== 'undefined' && App.dashboardData && App.dashboardData.portfolio;
@@ -38,6 +47,7 @@ const DividendsHistogram = {
             // Build monthly data from all sources
             const monthlyData = this.buildMonthlyData(dividends, coupons, lqdtProjection);
             this.lastMonthlyData = monthlyData;
+            this._loadedFor = this.portfolioId;
             const totalNext12Months = monthlyData.reduce((sum, m) => sum + m.total, 0);
 
             // Update UI elements

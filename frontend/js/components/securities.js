@@ -1,15 +1,24 @@
 const SecuritiesManager = {
     portfolioId: null,
 
-    async load(portfolioId) {
+    async load(portfolioId, force = false) {
         this.portfolioId = portfolioId || this.portfolioId;
         const container = document.getElementById('securities-list');
-        container.innerHTML = '<div class="loading">Загрузка...</div>';
 
         if (!this.portfolioId) return;
 
+        // Кеш: при навигации между страницами не перезапрашиваем, если уже загружено
+        if (!force && this._loadedFor === this.portfolioId && this._lastSecurities) {
+            this.render(this._lastSecurities);
+            return;
+        }
+
+        container.innerHTML = '<div class="loading">Загрузка...</div>';
+
         try {
             const securities = await API.getPortfolioSecurities(this.portfolioId);
+            this._lastSecurities = securities;
+            this._loadedFor = this.portfolioId;
             this.render(securities);
         } catch (e) {
             container.innerHTML = '<div class="loading">⚠️ Ошибка загрузки</div>';
@@ -166,7 +175,7 @@ const SecuritiesManager = {
             });
 
             this.closeAccrualModal();
-            await this.load();
+            await this.load(null, true);
             if (typeof App !== 'undefined' && App.loadDashboard) {
                 await App.loadDashboard();
             }
@@ -191,7 +200,7 @@ const SecuritiesManager = {
         if (!confirm(`Удалить бумагу ${sec.ticker} (${sec.name})?\nЭто также удалит все связанные сделки и позиции.`)) return;
         try {
             await API.deleteSecurity(sec.id);
-            await this.load();
+            await this.load(null, true);
             if (typeof ModalComponent !== 'undefined' && ModalComponent.loadSecurities) {
                 ModalComponent.loadSecurities();
             }
@@ -212,7 +221,7 @@ const SecuritiesManager = {
         try {
             await API.updateSecurity(id, { ticker, name, security_type: securityType });
             this.closeEditModal();
-            await this.load();
+            await this.load(null, true);
             if (typeof ModalComponent !== 'undefined' && ModalComponent.loadSecurities) {
                 ModalComponent.loadSecurities();
             }
