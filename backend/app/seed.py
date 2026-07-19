@@ -134,7 +134,7 @@ def seed_database(db: Session):
         ("AFKS", "Система", "stock", "RU000A0DQZE3"),
         ("HYDR", "РусГидро", "stock", "RU000A0JP0H0"),
         ("IRAO", "Интер РАО", "stock", "RU000A0JPNM1"),
-        ("UPRO", "Юнипро", "stock", "RU000A0JSqA0"),
+        ("UPRO", "Юнипро", "stock", "RU000A0JSQA0"),
         ("RTKM", "Ростелеком", "stock", "RU0008943394"),
         ("FEES", "ФСК ЕЭС", "stock", "RU000A0JPLG3"),
         ("AFLT", "Аэрофлот", "stock", "RU0009062285"),

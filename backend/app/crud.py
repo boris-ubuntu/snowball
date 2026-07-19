@@ -10,6 +10,55 @@ from . import models, schemas
 logger = logging.getLogger(__name__)
 
 
+def _fifo_realized_by_security(txns, window_start=None):
+    """Compute per-security realized P&L using FIFO matching of buy/sell
+    transactions (shared by get_dashboard's all-time and 12-month passes,
+    avoiding duplicated FIFO loops).
+
+    Args:
+        txns: transactions ordered by transaction_date, id (ascending).
+        window_start: if given, only sells with transaction_date >= window_start
+            contribute to the returned realized P&L/total_sold. Buys and sells
+            before the window are still consumed from the FIFO queue so cost
+            basis for in-window sells stays correct.
+
+    Returns:
+        (sec_realized, sec_buys, total_sold):
+            sec_realized: dict[security_id -> realized P&L (float)]
+            sec_buys: dict[security_id -> remaining [(qty, price), ...] FIFO queue]
+            total_sold: sum of sell revenue for in-window sells (float)
+    """
+    from collections import defaultdict
+
+    sec_buys = defaultdict(list)
+    sec_realized = defaultdict(float)
+    total_sold = 0.0
+
+    for tx in txns:
+        if tx.transaction_type == "buy":
+            sec_buys[tx.security_id].append((tx.quantity, tx.price))
+        elif tx.transaction_type == "sell":
+            in_window = window_start is None or tx.transaction_date >= window_start
+            remaining_sell = tx.quantity
+            sell_revenue = tx.quantity * tx.price - tx.commission
+            cost_of_sold = 0
+            buys = sec_buys[tx.security_id]
+            while remaining_sell > 0 and buys:
+                buy_qty, buy_price = buys[0]
+                used = min(buy_qty, remaining_sell)
+                cost_of_sold += used * buy_price
+                remaining_sell -= used
+                if used >= buy_qty:
+                    buys.pop(0)
+                else:
+                    buys[0] = (buy_qty - used, buy_price)
+            if in_window:
+                sec_realized[tx.security_id] += sell_revenue - cost_of_sold
+                total_sold += sell_revenue
+
+    return sec_realized, sec_buys, total_sold
+
+
 # === Securities ===
 def get_security(db: Session, security_id: int) -> Optional[models.Security]:
     return db.query(models.Security).filter(models.Security.id == security_id).first()
@@ -70,6 +119,7 @@ def get_portfolio_securities(db: Session, portfolio_id: int) -> List[schemas.Por
             quantity=pos.quantity if pos else 0,
             avg_price=pos.avg_price if pos else None,
             total_accruals=pos.total_accruals if pos else 0,
+            realized_profit=pos.realized_profit if pos else 0,
         ))
     
     return result
@@ -327,8 +377,6 @@ def delete_transaction(db: Session, transaction_id: int) -> bool:
 
 def recalculate_position(db: Session, portfolio_id: int, security_id: int):
     """Recalculate position (quantity, avg_price, total_accruals, realized_profit) from all transactions."""
-    from collections import defaultdict
-    
     all_txns = db.query(models.Transaction).filter(
         models.Transaction.portfolio_id == portfolio_id,
         models.Transaction.security_id == security_id,
@@ -352,37 +400,25 @@ def recalculate_position(db: Session, portfolio_id: int, security_id: int):
     total_qty = 0
     total_cost = 0.0
     total_accruals = 0.0
-    realized_profit = 0.0
-    
-    # FIFO tracking for realized P&L
-    buys = []  # list of (qty, price)
-    
+
     for tx in all_txns:
         if tx.transaction_type == "buy":
             total_qty += tx.quantity
             total_cost += tx.quantity * tx.price + tx.commission
-            buys.append((tx.quantity, tx.price))
         elif tx.transaction_type == "sell":
-            remaining_sell = tx.quantity
-            sell_revenue = tx.quantity * tx.price - tx.commission
-            cost_of_sold = 0
-            while remaining_sell > 0 and buys:
-                buy_qty, buy_price = buys[0]
-                used = min(buy_qty, remaining_sell)
-                cost_of_sold += used * buy_price
-                remaining_sell -= used
-                if used >= buy_qty:
-                    buys.pop(0)
-                else:
-                    buys[0] = (buy_qty - used, buy_price)
-            realized_profit += sell_revenue - cost_of_sold
             total_qty -= tx.quantity
             if total_qty < 0:
                 total_qty = 0
         elif tx.transaction_type == "accrual":
             total_accruals += tx.total_amount
-    
+
     avg_price = total_cost / total_qty if total_qty > 0 else 0
+
+    # Realized P&L via the shared FIFO helper (avoids a duplicate buy/sell
+    # matching loop here). `all_txns` is already scoped to this security.
+    sec_realized, _, _ = _fifo_realized_by_security(all_txns)
+    realized_profit = sec_realized.get(security_id, 0.0)
+
     
     if position:
         position.quantity = total_qty
@@ -499,29 +535,8 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
         models.Transaction.portfolio_id == portfolio_id,
     ).order_by(models.Transaction.transaction_date, models.Transaction.id).all()
     
-    # Calculate realized P&L per security using FIFO-like approach
-    from collections import defaultdict
-    sec_buys = defaultdict(list)  # security_id -> [(qty, price)]
-    sec_realized = defaultdict(float)  # security_id -> realized P&L
-    
-    for tx in all_txns:
-        if tx.transaction_type == "buy":
-            sec_buys[tx.security_id].append((tx.quantity, tx.price))
-        elif tx.transaction_type == "sell":
-            remaining_sell = tx.quantity
-            sell_revenue = tx.quantity * tx.price - tx.commission
-            cost_of_sold = 0
-            buys = sec_buys[tx.security_id]
-            while remaining_sell > 0 and buys:
-                buy_qty, buy_price = buys[0]
-                used = min(buy_qty, remaining_sell)
-                cost_of_sold += used * buy_price
-                remaining_sell -= used
-                if used >= buy_qty:
-                    buys.pop(0)
-                else:
-                    buys[0] = (buy_qty - used, buy_price)
-            sec_realized[tx.security_id] += sell_revenue - cost_of_sold
+    # Calculate realized P&L per security using FIFO (shared helper)
+    sec_realized, sec_buys, _ = _fifo_realized_by_security(all_txns)
 
     from .services.cbr_service import convert_to_rub
 
@@ -638,10 +653,10 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
                                 "quantity": d["quantity"],
                                 "total_expected": d["total_expected"],
                             })
-                    except:
-                        pass
-            except:
-                pass
+                    except (KeyError, ValueError, TypeError) as e:
+                        logger.debug(f"Skipping malformed dohod dividend entry: {e}")
+            except Exception as e:
+                logger.debug(f"Could not fetch dohod dividends for portfolio: {e}")
         
         for sec_ref in positions:
             sec = sec_ref.security
@@ -669,8 +684,8 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
                                     "quantity": sec_ref.quantity,
                                     "total_expected": value_per * sec_ref.quantity,
                                 })
-                        except:
-                            pass
+                        except (KeyError, ValueError, TypeError) as e:
+                            logger.debug(f"Skipping malformed coupon entry for {sec.ticker}: {e}")
         
         # Исключаем уже начисленные (прошедшие) выплаты из ожидаемого дохода
         accrued_keys = set()
@@ -689,8 +704,8 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
                     if sec and (sec.id, d["registry_close_date"]) in accrued_keys:
                         continue  # уже начислено -> не ждём
                     expected_annual_income += d.get("total_expected", 0)
-            except:
-                pass
+            except (KeyError, ValueError, TypeError) as e:
+                logger.debug(f"Skipping malformed dividend entry in income calc: {e}")
 
         for c in all_coups:
             try:
@@ -700,8 +715,8 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
                     if sec and (sec.id, c["coupon_date"]) in accrued_keys:
                         continue  # уже начислено -> не ждём
                     expected_annual_income += c.get("total_expected", 0)
-            except:
-                pass
+            except (KeyError, ValueError, TypeError) as e:
+                logger.debug(f"Skipping malformed coupon entry in income calc: {e}")
 
         # Рассчитываем доходность от стоимости только тех активов, которые платят
         # дивиденды/купоны в следующие 12 месяцев
@@ -713,8 +728,8 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
                     sec = get_security_by_ticker(db, d.get("ticker"))
                     if sec:
                         paying_security_ids.add(sec.id)
-            except:
-                pass
+            except (KeyError, ValueError, TypeError) as e:
+                logger.debug(f"Skipping malformed dividend entry in yield calc: {e}")
         for c in all_coups:
             try:
                 c_date = datetime.strptime(c["coupon_date"], "%Y-%m-%d").date()
@@ -722,8 +737,8 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
                     sec = get_security_by_ticker(db, c.get("ticker"))
                     if sec:
                         paying_security_ids.add(sec.id)
-            except:
-                pass
+            except (KeyError, ValueError, TypeError) as e:
+                logger.debug(f"Skipping malformed coupon entry in yield calc: {e}")
 
         # Суммируем стоимость только тех позиций, которые платят
         paying_value = 0
@@ -739,61 +754,23 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
         logger.error(f"Error calculating expected annual income: {e}")
 
     # === Calculate 12-month metrics ===
-    # NOTE: reuse the already-loaded `all_txns` list instead of hitting the DB a
-    # third time. This removes a second full-table scan and a second FIFO pass.
+    # Reuse the already-loaded `all_txns` list and the shared FIFO helper
+    # instead of a second hand-rolled FIFO loop.
     twelve_months_ago = date.today() - timedelta(days=365)
 
-    total_invested_12m = 0  # total spent on buys in last 12 months
-    total_sold_12m = 0      # total revenue from sells in last 12 months
-    total_accruals_12m = 0  # total accruals in last 12 months
-    realized_profit_12m = 0 # profit from buy/sell (without accruals) in last 12 months
+    sec_realized_12m, _, total_sold_12m = _fifo_realized_by_security(all_txns, window_start=twelve_months_ago)
+    realized_profit_12m = sum(sec_realized_12m.values())
 
-    sec_buys_12m = defaultdict(list)
-    sec_realized_12m = defaultdict(float)
+    total_accruals_12m = sum(
+        tx.total_amount for tx in all_txns
+        if tx.transaction_type == "accrual" and tx.transaction_date >= twelve_months_ago
+    )
 
-    for tx in all_txns:
-        if tx.transaction_type == "buy":
-            sec_buys_12m[tx.security_id].append((tx.quantity, tx.price))
-        elif tx.transaction_type == "sell":
-            # Only count sales within the 12-month window for realized profit
-            if tx.transaction_date < twelve_months_ago:
-                # Still consume buys for cost basis, but don't count realized profit
-                remaining_sell = tx.quantity
-                buys = sec_buys_12m[tx.security_id]
-                while remaining_sell > 0 and buys:
-                    buy_qty, buy_price = buys[0]
-                    used = min(buy_qty, remaining_sell)
-                    remaining_sell -= used
-                    if used >= buy_qty:
-                        buys.pop(0)
-                    else:
-                        buys[0] = (buy_qty - used, buy_price)
-            else:
-                remaining_sell = tx.quantity
-                sell_revenue = tx.quantity * tx.price - tx.commission
-                cost_of_sold = 0
-                buys = sec_buys_12m[tx.security_id]
-                while remaining_sell > 0 and buys:
-                    buy_qty, buy_price = buys[0]
-                    used = min(buy_qty, remaining_sell)
-                    cost_of_sold += used * buy_price
-                    remaining_sell -= used
-                    if used >= buy_qty:
-                        buys.pop(0)
-                    else:
-                        buys[0] = (buy_qty - used, buy_price)
-                sec_realized_12m[tx.security_id] += sell_revenue - cost_of_sold
-                total_sold_12m += sell_revenue
-        elif tx.transaction_type == "accrual" and tx.transaction_date >= twelve_months_ago:
-            total_accruals_12m += tx.total_amount
-
-    # 12-month total invested = sum of all buy transactions in the period (in-memory)
     total_invested_12m = sum(
         tx.total_amount for tx in all_txns
         if tx.transaction_type == "buy" and tx.transaction_date >= twelve_months_ago
     )
 
-    realized_profit_12m = sum(sec_realized_12m.values())
     total_return_12m = total_accruals_12m + realized_profit_12m
 
     recent_txns = get_transactions(db, portfolio_id, limit=10)

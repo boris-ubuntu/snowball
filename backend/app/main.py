@@ -4,12 +4,16 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
 from .config import settings
-from .database import init_db, check_db_connection
+from .database import init_db, check_db_connection, SessionLocal
 from .routers import securities, portfolio, dividends, rates, economy, auth
 from .load_moex_securities import load_all_securities
-from .database import SessionLocal
 from .seed import run_seed
+from . import models
+import logging
 import os
+
+logger = logging.getLogger(__name__)
+
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -50,16 +54,16 @@ def health_check():
 def on_startup():
     try:
         init_db()
-        print(f"✅ Database initialized successfully")
-        
+        logger.info("Database initialized successfully")
+
         # Seed database with initial data (portfolio, securities from dump)
         run_seed()
-        
+
         # Load all MOEX securities and ensure currencies in background
         def load_moex():
+            db = SessionLocal()
             try:
                 import asyncio
-                db = SessionLocal()
                 # Skip the heavy full-MOEX load on restarts once the DB is already
                 # populated (seed.py + critical securities). This keeps startup fast;
                 # the full catalog can still be loaded on demand via
@@ -68,20 +72,21 @@ def on_startup():
                 if count < 100:
                     asyncio.run(load_all_securities(db))
                 else:
-                    print(f"ℹ️ {count} securities already present, skipping full MOEX load")
+                    logger.info(f"{count} securities already present, skipping full MOEX load")
                 from .load_moex_securities import ensure_currency_securities
                 ensure_currency_securities(db)
-                db.close()
             except Exception as e:
-                print(f"⚠️ Could not auto-load MOEX securities: {e}")
-        
+                logger.warning(f"Could not auto-load MOEX securities: {e}")
+            finally:
+                db.close()
+
         import threading
         thread = threading.Thread(target=load_moex, daemon=True)
         thread.start()
-        
+
     except Exception as e:
-        print(f"❌ Database initialization error: {e}")
-        print("⚠️  Make sure PostgreSQL is running and the database exists")
+        logger.error(f"Database initialization error: {e}")
+        logger.error("Make sure PostgreSQL is running and the database exists")
 
 
 # === Frontend static files (must be registered after API routes) ===

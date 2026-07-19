@@ -30,19 +30,34 @@ async def _auto_accrue(db: Session, portfolio_id: int):
 
 # Throttle the heavy background refresh so it does not run on every dashboard
 # request (which would hammer MOEX/CBR on every page load, especially on small
-# Render/Neon deployments). One full refresh per process per REFRESH_INTERVAL.
-import time
-_LAST_BG_REFRESH = 0.0
-_BG_REFRESH_INTERVAL = 300.0  # seconds
+# Render/Neon deployments). One full refresh per REFRESH_INTERVAL.
+#
+# NOTE: the app runs with multiple uvicorn workers (see Dockerfile: --workers 2),
+# each in its own process. A plain module-level variable would give EACH worker
+# its own throttle clock, so the effective refresh rate would scale with the
+# worker count instead of staying at one refresh per interval. To make the
+# throttle actually global we persist the "last refresh" marker in the DB-backed
+# cache table (moex_cache) via cache_service, which all workers share.
+_BG_REFRESH_INTERVAL_MINUTES = 5  # 300 seconds
 
 
-def _should_run_background_refresh() -> bool:
-    global _LAST_BG_REFRESH
-    now = time.monotonic()
-    if now - _LAST_BG_REFRESH >= _BG_REFRESH_INTERVAL:
-        _LAST_BG_REFRESH = now
-        return True
-    return False
+def _should_run_background_refresh(db: Session) -> bool:
+    """Cross-process throttle backed by the DB cache table.
+
+    Returns True (and marks the throttle) at most once per
+    _BG_REFRESH_INTERVAL_MINUTES, shared across all worker processes.
+    """
+    from ..services.cache_service import get_cached_data, set_cached_data
+
+    if get_cached_data(db, "_system", "bg_refresh_throttle") is not None:
+        return False
+    set_cached_data(
+        db, "_system", "bg_refresh_throttle",
+        [{"ts": datetime.utcnow().isoformat()}],
+        ttl_minutes=_BG_REFRESH_INTERVAL_MINUTES,
+    )
+    return True
+
 
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
@@ -83,7 +98,7 @@ async def get_dashboard(portfolio_id: int, db: Session = Depends(get_db)):
     # Kick off background refresh of prices, dividends, coupons, CBR rates, and auto-accruals
     # This runs in background after the response is sent. Throttled so it does not
     # fire on every request (keeps the deployed instance responsive).
-    if _should_run_background_refresh():
+    if _should_run_background_refresh(db):
         from ..services.background_updater import (
             refresh_all_prices_background,
             refresh_dividends_background,

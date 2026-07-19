@@ -2,11 +2,8 @@ from sqlalchemy import Column, Integer, String, Float, Date, DateTime, ForeignKe
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.sql import func
 import enum
-import pytz
 
 Base = declarative_base()
-
-moscow_tz = pytz.timezone("Europe/Moscow")
 
 
 class SecurityType(str, enum.Enum):
