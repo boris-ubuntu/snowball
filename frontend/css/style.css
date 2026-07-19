@@ -709,7 +709,8 @@ tbody tr:last-child td { border-bottom: none; }
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    overflow: hidden;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 #operations-section {
@@ -952,6 +953,15 @@ tbody tr:last-child td { border-bottom: none; }
         left: 0;
         background: var(--bg-card);
         z-index: 1;
+        min-width: 100px;
+    }
+
+    #operations-section .ops-table tbody td:first-child {
+        background: var(--bg-primary);
+    }
+
+    #operations-section .ops-table tbody tr:hover td:first-child {
+        background: var(--bg-hover);
     }
 
     #dividends-section {
