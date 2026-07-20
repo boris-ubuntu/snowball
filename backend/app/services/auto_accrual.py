@@ -48,8 +48,8 @@ async def check_and_process_accruals(db: Session, portfolio_id: int) -> Dict:
         except (ValueError, TypeError):
             continue
 
-        # Skip future dividends
-        if close_date >= date.today():
+        # Skip future dividends (accrue on the registry close date itself)
+        if close_date > date.today():
             continue
 
         # Find the security in DB
@@ -104,8 +104,8 @@ async def check_and_process_accruals(db: Session, portfolio_id: int) -> Dict:
         except (ValueError, TypeError):
             continue
 
-        # Skip future coupons
-        if coup_date >= date.today():
+        # Skip future coupons (accrue on the coupon date itself)
+        if coup_date > date.today():
             continue
 
         sec = crud.get_security_by_ticker(db, coup["ticker"])
