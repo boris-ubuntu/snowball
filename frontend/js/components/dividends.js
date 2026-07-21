@@ -79,9 +79,11 @@ const DividendsComponent = {
                     date: new Date(d.registry_close_date),
                     amount: d.total_expected || 0,
                     type: 'Дивиденд',
+                    projected: d.source === 'projected',
                 });
             }
         }
+
 
         // Sort by date ascending
         items.sort((a, b) => a.date - b.date);
@@ -117,15 +119,20 @@ const DividendsComponent = {
 
         for (const item of items) {
             const dateStr = item.date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
-            html += `<tr>
+            const rowStyle = item.projected ? ' style="border-left: 3px solid #7c3aed; background: rgba(124,58,237,0.06);"' : '';
+            const badge = item.projected
+                ? ' <span style="color:#7c3aed; font-size:0.7rem; font-weight:600; border:1px solid #7c3aed; border-radius:4px; padding:1px 5px; margin-left:6px;">прогноз</span>'
+                : '';
+            html += `<tr${rowStyle}>
                 <td>
-                    <div class="pos-name">${item.name}</div>
+                    <div class="pos-name">${item.name}${badge}</div>
                     <div class="pos-ticker">${item.ticker}</div>
                 </td>
                 <td class="tx-date">${dateStr}</td>
                 <td class="tx-amount positive" style="text-align:right;">${Utils.formatCurrency(item.amount)}</td>
             </tr>`;
         }
+
 
         html += `</tbody></table>`;
         html += `</div>`;

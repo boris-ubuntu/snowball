@@ -194,7 +194,7 @@ class PortfolioSummary(BaseModel):
     total_return_12m: float = 0  # Total profit from transactions in last 12 months
     total_invested_12m: float = 0  # Total invested (buy) in last 12 months
     realized_profit_12m: float = 0  # Profit from buy/sell (without accruals) in last 12 months
-    actual_monthly_income_avg: float = 0  # Факт: средний доход в месяц (дивиденды+купоны за 12 мес / кол-во месяцев)
+
 
 
 

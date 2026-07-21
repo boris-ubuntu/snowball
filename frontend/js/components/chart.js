@@ -76,18 +76,18 @@ const ChartComponent = {
             '#4ea8de', '#72efdd', '#64dfdf', '#80ffdb', '#7400b8',
         ];
 
-        // Actual average monthly income (TTM basis): факт начисленных дивидендов/купонов
-        // за последние 12 месяцев / кол-во месяцев. Стабильная метрика, не скачет
-        // при выплате дивиденда (в отличие от прогноза на следующие 12 месяцев).
+        // Средний доход в месяц: прогноз на основе dohod.ru (ближайшие 12 мес.)
+        // + экстраполяция (YoY) для акций без данных на dohod.ru.
         // Apply 0.87 tax coefficient (13% НДФЛ)
         this.averageMonthlyIncome = '0 ₽';
         this.averageMonthlyIncomeRaw = 0;
-        const actualAvg = data.portfolio?.actual_monthly_income_avg || 0;
-        if (actualAvg > 0) {
-            const avg = actualAvg * 0.87;
+        const expectedAnnual = data.portfolio?.expected_annual_income || 0;
+        if (expectedAnnual > 0) {
+            const avg = (expectedAnnual / 12) * 0.87;
             this.averageMonthlyIncomeRaw = avg;
             this.averageMonthlyIncome = Math.round(avg).toLocaleString('ru-RU') + ' ₽';
         }
+
 
 
         const self = this;
@@ -210,7 +210,7 @@ const ChartComponent = {
                     const fontSize = '2.0';
                     ctx.font = 'bold ' + fontSize + 'em Segoe UI, Tahoma, sans-serif';
                     ctx.textBaseline = 'middle';
-                    // Show actual (TTM) average monthly income (integer)
+                    // Show projected average monthly income (integer)
                     const text = ChartComponent.averageMonthlyIncome || '0 ₽';
                     const textY = height / 2 - 8;
                     ctx.fillStyle = '#e2e8f0';
@@ -220,7 +220,8 @@ const ChartComponent = {
                     // Sub-label
                     ctx.font = (parseFloat(fontSize) * 0.45) + 'em Segoe UI, Tahoma, sans-serif';
                     ctx.fillStyle = 'rgba(255,255,255,0.6)';
-                    ctx.fillText('в среднем в месяц (факт)', width / 2, textY + 18);
+                    ctx.fillText('в среднем в месяц', width / 2, textY + 18);
+
                     ctx.save();
                 },
             }],

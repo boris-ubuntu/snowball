@@ -658,13 +658,37 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
             except Exception as e:
                 logger.debug(f"Could not fetch dohod dividends for portfolio: {e}")
         
+        # Тикеры, для которых dohod.ru уже дал прогноз на ближайшие 12 месяцев -
+        # для остальных акций пробуем построить прогноз по истории MOEX (YoY).
+        dohod_tickers_covered = {d["ticker"] for d in all_divs}
+
+        from .services.dividend_projection import estimate_dividend_for_ticker
+
         for sec_ref in positions:
             sec = sec_ref.security
             if not sec or sec_ref.quantity <= 0:
                 continue
+
+            # Прогноз дивиденда по акции, если dohod.ru не покрывает эту акцию
+            if sec.security_type == "stock" and sec.ticker not in dohod_tickers_covered:
+                try:
+                    projected = await estimate_dividend_for_ticker(db, sec.ticker, sec_ref.quantity)
+                    if projected:
+                        all_divs.append({
+                            "ticker": sec.ticker,
+                            "name": sec.name,
+                            "registry_close_date": projected["registry_close_date"],
+                            "value_per_share": projected["value_per_share"],
+                            "quantity": projected["quantity"],
+                            "total_expected": projected["total_expected"],
+                            "source": "projected",
+                        })
+                except Exception as e:
+                    logger.debug(f"Could not project dividend for {sec.ticker}: {e}")
             
             # Get coupons from cache only
             if sec.security_type in ("bond", "ofz"):
+
                 sec_coups = get_cached_data(db, sec.ticker, 'coupons')
                 if sec_coups:
                     for coup in sec_coups:
@@ -773,19 +797,8 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
 
     total_return_12m = total_accruals_12m + realized_profit_12m
 
-    # === Actual average monthly income (TTM basis) ===
-    # Fact-based, stable metric: sum of actually accrued dividends/coupons/LQDT
-    # in the trailing 12 months, divided by the number of months of history
-    # (capped at 12). Avoids the "jumpy" forward-looking forecast window.
-    if all_txns:
-        first_txn_date = all_txns[0].transaction_date
-        months_elapsed = (date.today() - first_txn_date).days / 30.44
-        divisor = min(12, max(1, months_elapsed))
-    else:
-        divisor = 12
-    actual_monthly_income_avg = total_accruals_12m / divisor if divisor > 0 else 0
-
     recent_txns = get_transactions(db, portfolio_id, limit=10)
+
 
 
     return schemas.DashboardResponse(
@@ -801,8 +814,8 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
             total_return_12m=round(total_return_12m, 2),
             total_invested_12m=round(total_invested_12m, 2),
             realized_profit_12m=round(realized_profit_12m, 2),
-            actual_monthly_income_avg=round(actual_monthly_income_avg, 2),
         ),
+
         positions=position_list,
 
         recent_transactions=recent_txns,

@@ -3,7 +3,8 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 import asyncio
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+
 
 from .. import schemas, crud
 from ..database import get_db
@@ -162,44 +163,73 @@ async def portfolio_dividends(
     from ..services.cache_service import get_cached_data as _get_cache
     from ..services.dohod_service import get_dohod_dividends_for_portfolio
     from ..services.moex_dividends import get_portfolio_dividends_all
+    from ..services.dividend_projection import estimate_dividend_for_ticker
     
     today = date.today()
+    one_year = today + timedelta(days=365)
+    
+    result = []
+    covered_tickers = set()
     
     # Try dohod.ru first (it has future dividends for SBER, MDMG, etc.)
     try:
         dohod_divs = await get_dohod_dividends_for_portfolio(db, portfolio_id, force_refresh=force_refresh)
-        if dohod_divs:
-            # Filter by date
-            result = []
-            for d in dohod_divs:
-                try:
-                    close_date = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
-                    if all or close_date >= today:
-                        result.append(d)
-                except:
-                    pass
-            result.sort(key=lambda x: x["registry_close_date"], reverse=True)
-            return result
-    except Exception as e:
-        logger.debug(f"Dohod dividends fetch failed: {e}")
-    
-    # Fallback: try MOEX API (historical dividends)
-    try:
-        moex_divs = await get_portfolio_dividends_all(db, portfolio_id, force_refresh=force_refresh)
-        result = []
-        for d in moex_divs:
+        for d in dohod_divs:
             try:
                 close_date = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
                 if all or close_date >= today:
                     result.append(d)
+                if close_date <= one_year:
+                    covered_tickers.add(d["ticker"])
             except:
                 pass
-        result.sort(key=lambda x: x["registry_close_date"], reverse=True)
-        return result
+    except Exception as e:
+        logger.debug(f"Dohod dividends fetch failed: {e}")
+    
+    # Fallback: try MOEX API (historical + future dividends)
+    try:
+        moex_divs = await get_portfolio_dividends_all(db, portfolio_id, force_refresh=force_refresh)
+        for d in moex_divs:
+            try:
+                close_date = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
+            except:
+                continue
+            if (d["ticker"], d["registry_close_date"]) in {(r["ticker"], r["registry_close_date"]) for r in result}:
+                continue
+            if all or close_date >= today:
+                result.append(d)
+            if today <= close_date <= one_year:
+                covered_tickers.add(d["ticker"])
     except Exception as e:
         logger.debug(f"MOEX dividends fetch failed: {e}")
     
-    return []
+    # Достраиваем прогноз для акций без данных на ближайшие 12 месяцев
+    try:
+        securities = crud.get_portfolio_securities(db, portfolio_id)
+        for sec in securities:
+            if sec.security_type != "stock" or getattr(sec, "quantity", 0) <= 0:
+                continue
+            if sec.ticker in covered_tickers:
+                continue
+            projected = await estimate_dividend_for_ticker(db, sec.ticker, sec.quantity)
+            if projected:
+                result.append({
+                    "ticker": sec.ticker,
+                    "name": sec.name,
+                    "isin": sec.isin or "",
+                    "registry_close_date": projected["registry_close_date"],
+                    "value_per_share": projected["value_per_share"],
+                    "currency": sec.currency or "RUB",
+                    "quantity": projected["quantity"],
+                    "total_expected": projected["total_expected"],
+                    "source": "projected",
+                })
+    except Exception as e:
+        logger.debug(f"Dividend projection failed for portfolio {portfolio_id}: {e}")
+    
+    result.sort(key=lambda x: x["registry_close_date"], reverse=True)
+    return result
+
 
 
 @router.get("/{portfolio_id}/coupons")

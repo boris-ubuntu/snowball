@@ -232,17 +232,25 @@ const DividendsHistogram = {
             const yearLabel = String(m.date.getFullYear()).slice(2);
             const isCurrentMonth = now.getMonth() === m.date.getMonth() && now.getFullYear() === m.date.getFullYear();
             const hasItems = m.items && m.items.length > 0;
+            const hasProjected = hasItems && m.items.some(i => i.source === 'projected');
 
             const tooltipContent = hasItems
-                ? m.items.map(i => `${i.ticker || i.name}: ${Utils.formatCurrency(i.total_expected || 0)}`).join('<br>')
+                ? m.items.map(i => {
+                    const isProjected = i.source === 'projected';
+                    const label = `${i.ticker || i.name}: ${Utils.formatCurrency(i.total_expected || 0)}`;
+                    return isProjected ? `${label} <span style="color:#a78bfa;">(прогноз)</span>` : label;
+                }).join('<br>')
                 : '';
 
             // Wider bars with rounded corners
             const barHeight = hasItems ? Math.max(heightPct, 8) : 2;
-            const barBg = hasItems
-                ? 'linear-gradient(180deg, var(--accent-light), var(--accent))'
-                : 'var(--bg-hover)';
+            const barBg = !hasItems
+                ? 'var(--bg-hover)'
+                : hasProjected
+                    ? 'linear-gradient(180deg, #c4b5fd, #7c3aed)'
+                    : 'linear-gradient(180deg, var(--accent-light), var(--accent))';
             const barOpacity = hasItems ? 1 : 0.1;
+
 
             // Value label with margin-bottom for spacing
             const valueLabel = hasItems
