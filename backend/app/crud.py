@@ -773,7 +773,20 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
 
     total_return_12m = total_accruals_12m + realized_profit_12m
 
+    # === Actual average monthly income (TTM basis) ===
+    # Fact-based, stable metric: sum of actually accrued dividends/coupons/LQDT
+    # in the trailing 12 months, divided by the number of months of history
+    # (capped at 12). Avoids the "jumpy" forward-looking forecast window.
+    if all_txns:
+        first_txn_date = all_txns[0].transaction_date
+        months_elapsed = (date.today() - first_txn_date).days / 30.44
+        divisor = min(12, max(1, months_elapsed))
+    else:
+        divisor = 12
+    actual_monthly_income_avg = total_accruals_12m / divisor if divisor > 0 else 0
+
     recent_txns = get_transactions(db, portfolio_id, limit=10)
+
 
     return schemas.DashboardResponse(
         portfolio=schemas.PortfolioSummary(
@@ -788,7 +801,9 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
             total_return_12m=round(total_return_12m, 2),
             total_invested_12m=round(total_invested_12m, 2),
             realized_profit_12m=round(realized_profit_12m, 2),
+            actual_monthly_income_avg=round(actual_monthly_income_avg, 2),
         ),
         positions=position_list,
+
         recent_transactions=recent_txns,
     )

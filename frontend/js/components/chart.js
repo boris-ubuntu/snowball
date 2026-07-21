@@ -76,19 +76,19 @@ const ChartComponent = {
             '#4ea8de', '#72efdd', '#64dfdf', '#80ffdb', '#7400b8',
         ];
 
-        // Calculate average monthly income from histogram data (total next 12 months / 12)
+        // Actual average monthly income (TTM basis): факт начисленных дивидендов/купонов
+        // за последние 12 месяцев / кол-во месяцев. Стабильная метрика, не скачет
+        // при выплате дивиденда (в отличие от прогноза на следующие 12 месяцев).
         // Apply 0.87 tax coefficient (13% НДФЛ)
         this.averageMonthlyIncome = '0 ₽';
         this.averageMonthlyIncomeRaw = 0;
-        if (typeof DividendsHistogram !== 'undefined' && DividendsHistogram.lastMonthlyData) {
-            const totalNext12Months = DividendsHistogram.lastMonthlyData.reduce((sum, m) => sum + m.total, 0);
-            if (totalNext12Months > 0) {
-                const avg = (totalNext12Months / 12) * 0.87;
-                this.averageMonthlyIncomeRaw = avg;
-                // Round to integer and format without decimals
-                this.averageMonthlyIncome = Math.round(avg).toLocaleString('ru-RU') + ' ₽';
-            }
+        const actualAvg = data.portfolio?.actual_monthly_income_avg || 0;
+        if (actualAvg > 0) {
+            const avg = actualAvg * 0.87;
+            this.averageMonthlyIncomeRaw = avg;
+            this.averageMonthlyIncome = Math.round(avg).toLocaleString('ru-RU') + ' ₽';
         }
+
 
         const self = this;
 
@@ -210,7 +210,7 @@ const ChartComponent = {
                     const fontSize = '2.0';
                     ctx.font = 'bold ' + fontSize + 'em Segoe UI, Tahoma, sans-serif';
                     ctx.textBaseline = 'middle';
-                    // Show average monthly income over next 12 months (integer)
+                    // Show actual (TTM) average monthly income (integer)
                     const text = ChartComponent.averageMonthlyIncome || '0 ₽';
                     const textY = height / 2 - 8;
                     ctx.fillStyle = '#e2e8f0';
@@ -220,7 +220,7 @@ const ChartComponent = {
                     // Sub-label
                     ctx.font = (parseFloat(fontSize) * 0.45) + 'em Segoe UI, Tahoma, sans-serif';
                     ctx.fillStyle = 'rgba(255,255,255,0.6)';
-                    ctx.fillText('в среднем в месяц', width / 2, textY + 18);
+                    ctx.fillText('в среднем в месяц (факт)', width / 2, textY + 18);
                     ctx.save();
                 },
             }],
