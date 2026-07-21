@@ -18,36 +18,18 @@ logger = logging.getLogger(__name__)
 
 
 async def _auto_accrue(db: Session, portfolio_id: int):
-    """
-    Автоматически начисляет прошедшие дивиденды и купоны, по которым уже прошла
-    дата закрытия реестра / выплаты купона и бумага на тот момент находилась в портфеле.
-    Идемпотентно: уже начисленные записи пропускаются.
-    """
+    """Автоматически начисляет прошедшие дивиденды и купоны."""
     try:
         await check_and_process_accruals(db, portfolio_id)
     except Exception as e:
         logger.debug(f"Auto-accrual skipped for portfolio {portfolio_id}: {e}")
 
 
-# Throttle the heavy background refresh so it does not run on every dashboard
-# request (which would hammer MOEX/CBR on every page load, especially on small
-# Render/Neon deployments). One full refresh per REFRESH_INTERVAL.
-#
-# NOTE: the app runs with multiple uvicorn workers (see Dockerfile: --workers 2),
-# each in its own process. A plain module-level variable would give EACH worker
-# its own throttle clock, so the effective refresh rate would scale with the
-# worker count instead of staying at one refresh per interval. To make the
-# throttle actually global we persist the "last refresh" marker in the DB-backed
-# cache table (moex_cache) via cache_service, which all workers share.
-_BG_REFRESH_INTERVAL_MINUTES = 5  # 300 seconds
+_BG_REFRESH_INTERVAL_MINUTES = 5
 
 
 def _should_run_background_refresh(db: Session) -> bool:
-    """Cross-process throttle backed by the DB cache table.
-
-    Returns True (and marks the throttle) at most once per
-    _BG_REFRESH_INTERVAL_MINUTES, shared across all worker processes.
-    """
+    """Cross-process throttle backed by the DB cache table."""
     from ..services.cache_service import get_cached_data, set_cached_data
 
     if get_cached_data(db, "_system", "bg_refresh_throttle") is not None:
@@ -97,8 +79,6 @@ async def get_dashboard(portfolio_id: int, db: Session = Depends(get_db)):
     result = await crud.get_dashboard(db, portfolio_id)
     
     # Kick off background refresh of prices, dividends, coupons, CBR rates, and auto-accruals
-    # This runs in background after the response is sent. Throttled so it does not
-    # fire on every request (keeps the deployed instance responsive).
     if _should_run_background_refresh(db):
         from ..services.background_updater import (
             refresh_all_prices_background,
@@ -113,7 +93,7 @@ async def get_dashboard(portfolio_id: int, db: Session = Depends(get_db)):
                 from ..database import SessionLocal
                 bg_db = SessionLocal()
                 try:
-                    # Run all refreshes in parallel
+                    # Run all refreshes in parallel (non-force, throttled by TTL)
                     await asyncio.gather(
                         refresh_all_prices_background(bg_db),
                         refresh_dividends_background(bg_db, portfolio_id),
@@ -121,14 +101,12 @@ async def get_dashboard(portfolio_id: int, db: Session = Depends(get_db)):
                         refresh_cbr_rates_background(bg_db),
                         refresh_economy_background(bg_db),
                     )
-                    # Auto-accruals in background (non-blocking)
                     await _auto_accrue(bg_db, portfolio_id)
                 finally:
                     bg_db.close()
             except Exception as e:
                 logger.debug(f"Background refresh error: {e}")
         
-        # Schedule background task (fire-and-forget)
         asyncio.create_task(_background_refresh())
     else:
         logger.debug("Background refresh skipped (throttled)")
@@ -138,7 +116,6 @@ async def get_dashboard(portfolio_id: int, db: Session = Depends(get_db)):
 
 @router.get("/{portfolio_id}/securities", response_model=List[schemas.PortfolioSecurityResponse])
 def get_portfolio_securities(portfolio_id: int, db: Session = Depends(get_db)):
-    """Get securities that are in the portfolio (have positions/transactions)"""
     portfolio = crud.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
@@ -152,10 +129,6 @@ async def portfolio_dividends(
     force_refresh: bool = Query(False, description="Force refresh from MOEX"),
     db: Session = Depends(get_db),
 ):
-    """Get dividends for portfolio securities.
-    Primary source: dohod.ru (future dividends).
-    Fallback: MOEX API (historical dividends).
-    Cache-first: returns cached data instantly, fetches from dohod.ru/MOEX only if no cache."""
     portfolio = crud.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
@@ -171,7 +144,7 @@ async def portfolio_dividends(
     result = []
     covered_tickers = set()
     
-    # Try dohod.ru first (it has future dividends for SBER, MDMG, etc.)
+    # Try dohod.ru first
     try:
         dohod_divs = await get_dohod_dividends_for_portfolio(db, portfolio_id, force_refresh=force_refresh)
         for d in dohod_divs:
@@ -186,7 +159,7 @@ async def portfolio_dividends(
     except Exception as e:
         logger.debug(f"Dohod dividends fetch failed: {e}")
     
-    # Fallback: try MOEX API (historical + future dividends)
+    # Fallback: MOEX API
     try:
         moex_divs = await get_portfolio_dividends_all(db, portfolio_id, force_refresh=force_refresh)
         for d in moex_divs:
@@ -239,69 +212,18 @@ async def portfolio_coupons(
     force_refresh: bool = Query(False, description="Force refresh from MOEX"),
     db: Session = Depends(get_db),
 ):
-    """Get coupons for OFZ/bonds in portfolio.
-    Returns cached data instantly if available.
-    If no cache, fetches from MOEX with short timeout (2s) and returns."""
     portfolio = crud.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     
-    from ..services.cache_service import get_cached_data
-    from .. import crud as _crud
-    
-    securities = _crud.get_portfolio_securities(db, portfolio_id)
-    today = date.today()
-    result = []
-    need_fetch = False
-    
-    for sec in securities:
-        if sec.security_type not in ("bond", "ofz") or sec.quantity <= 0:
-            continue
-        cached = get_cached_data(db, sec.ticker, 'coupons')
-        if cached is None:
-            need_fetch = True
-            continue
-        for coup in cached:
-            try:
-                cd_str = coup["coupon_date"]
-                if isinstance(cd_str, datetime):
-                    cd_str = cd_str.strftime("%Y-%m-%d")
-                coup_date = datetime.strptime(cd_str, "%Y-%m-%d").date()
-                if upcoming and coup_date < today:
-                    continue
-                value_per_bond = coup.get("value_rub", coup.get("value", 0))
-                if value_per_bond == 0:
-                    continue
-                result.append({
-                    "ticker": sec.ticker,
-                    "name": sec.name,
-                    "isin": coup.get("isin", ""),
-                    "coupon_date": cd_str,
-                    "record_date": str(coup.get("record_date", "")),
-                    "value_per_bond": value_per_bond,
-                    "facevalue": coup.get("facevalue", 1000),
-                    "quantity": sec.quantity,
-                    "total_expected": value_per_bond * sec.quantity,
-                })
-            except:
-                pass
-    
-    # If no cache at all, do a quick MOEX fetch (short timeout) to get initial data
-    if need_fetch and not result:
-        try:
-            from ..services.moex_coupons import get_portfolio_coupons
-            api_coups = await get_portfolio_coupons(db, portfolio_id, upcoming_only=upcoming, force_refresh=True)
-            result = api_coups
-        except Exception as e:
-            logger.debug(f"Quick MOEX coupons fetch failed: {e}")
-    
+    from ..services.moex_coupons import get_portfolio_coupons as _get_portfolio_coupons
+    result = await _get_portfolio_coupons(portfolio_id, upcoming_only=upcoming)
     result.sort(key=lambda x: x["coupon_date"], reverse=True)
     return result
 
 
 @router.post("/{portfolio_id}/process-accruals")
 async def process_accruals(portfolio_id: int, db: Session = Depends(get_db)):
-    """Auto-process historical dividends and coupons into accrual transactions"""
     portfolio = crud.get_portfolio(db, portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
@@ -336,13 +258,10 @@ async def refresh_cache(
     
     try:
         result = {"status": "ok", "message": "", "updated": []}
-        
-        # Очищаем просроченный кеш
         cleared = clear_expired_cache(db)
         if cleared:
             result["message"] += f"Cleared {cleared} expired entries. "
         
-        # Обновляем указанные типы кеша
         if cache_type is None or cache_type == "all" or cache_type == "dividends":
             await get_portfolio_dividends_all(db, portfolio_id, force_refresh=True)
             result["updated"].append("dividends")
@@ -443,6 +362,52 @@ def delete_transactions_by_security(portfolio_id: int, security_id: int, db: Ses
     """Delete all transactions and position for a security in a portfolio."""
     deleted = crud.delete_transactions_by_security(db, portfolio_id, security_id)
     return {"deleted": deleted, "status": "ok"}
+
+
+@router.post("/refresh-all")
+async def refresh_all_data(data: dict, db: Session = Depends(get_db)):
+    """Refresh all data from external sources with force=True (no cache skip)."""
+    portfolio_id = data.get("portfolio_id", 1)
+    from ..services.background_updater import (
+        refresh_all_prices_background,
+        refresh_dividends_background,
+        refresh_coupons_background,
+        refresh_cbr_rates_background,
+        refresh_economy_background,
+    )
+    results = {}
+    errors = []
+    try:
+        # Run all refreshes and capture results/errors
+        tasks = {
+            "prices": refresh_all_prices_background(db, force=True),
+            "dividends": refresh_dividends_background(db, portfolio_id, force=True),
+            "coupons": refresh_coupons_background(db, portfolio_id, force=True),
+            "cbr_rates": refresh_cbr_rates_background(db, force=True),
+            "economy": refresh_economy_background(db, force=True),
+        }
+        for name, coro in tasks.items():
+            try:
+                await coro
+                results[name] = "ok"
+            except Exception as e:
+                results[name] = f"error: {str(e)}"
+                errors.append(f"{name}: {str(e)}")
+        # Auto-accrue after refresh
+        try:
+            await _auto_accrue(db, portfolio_id)
+            results["accrual"] = "ok"
+        except Exception as e:
+            results["accrual"] = f"error: {str(e)}"
+            errors.append(f"accrual: {str(e)}")
+        status = "ok" if not errors else "partial"
+        return {
+            "status": status,
+            "results": results,
+            "errors": errors if errors else None,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh all data: {str(e)}")
 
 
 @router.get("/{portfolio_id}/lqdt-projection")

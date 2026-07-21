@@ -100,7 +100,7 @@ async def create_security(data: schemas.SecurityCreate, db: Session = Depends(ge
     
     # Try to fetch current price from MOEX
     try:
-        price = await get_current_price(db, security.ticker, security.isin, security.security_type, force_refresh=True)
+        price = await get_current_price(security.ticker, security.isin, security.security_type)
         if price is not None:
             security.current_price = price
             security.price_updated_at = datetime.now(timezone.utc)
@@ -118,7 +118,7 @@ async def refresh_security_price(security_id: int, db: Session = Depends(get_db)
     security = crud.get_security(db, security_id)
     if not security:
         raise HTTPException(status_code=404, detail="Security not found")
-    price = await get_current_price(db, security.ticker, security.isin, security.security_type, force_refresh=True)
+    price = await get_current_price(security.ticker, security.isin, security.security_type)
     if price is not None:
         security.current_price = price
         security.price_updated_at = datetime.now(timezone.utc)
@@ -133,6 +133,73 @@ def update_security(security_id: int, data: schemas.SecurityUpdate, db: Session 
     if not security:
         raise HTTPException(status_code=404, detail="Security not found")
     return security
+
+
+@router.post("/create-by-isin", response_model=schemas.SecurityResponse, status_code=201)
+async def create_security_by_isin(data: schemas.SecurityCreateByIsin, db: Session = Depends(get_db)):
+    """Create a security by ISIN. Tries MOEX search first, falls back to manual creation."""
+    isin = data.isin.strip().upper()
+    
+    # Check if already exists
+    existing = db.query(models.Security).filter(models.Security.isin == isin).first()
+    if existing:
+        return existing
+    
+    # Try to find on MOEX by ISIN
+    from ..services.moex_ofz_loader import search_moex_security
+    try:
+        moex_results = await search_moex_security(isin)
+        if moex_results:
+            moex = moex_results[0]
+            ticker = moex.get("ticker", isin)
+            name = moex.get("name", isin)
+            group = moex.get("group", "")
+            # Map MOEX group to security_type
+            type_map = {
+                "stock_shares": "stock",
+                "common_share": "stock",
+                "preferred_share": "stock",
+                "exchange_bond": "bond",
+                "corporate_bond": "bond",
+                "ofz_bond": "ofz",
+                "public_bond": "bond",
+                "etf_ppif": "etf",
+                "etf": "etf",
+            }
+            sec_type = type_map.get(group, "bond")
+            
+            # Check if ticker already exists
+            existing_ticker = crud.get_security_by_ticker(db, ticker)
+            if existing_ticker:
+                # Update ISIN on existing record
+                existing_ticker.isin = isin
+                db.commit()
+                db.refresh(existing_ticker)
+                return existing_ticker
+            
+            sec_data = schemas.SecurityCreate(
+                ticker=ticker,
+                name=name,
+                security_type=sec_type,
+                isin=isin,
+            )
+            return await create_security(data=sec_data, db=db)
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.debug(f"MOEX search by ISIN failed: {e}")
+    
+    # Fallback: create with ISIN as ticker, type=bond
+    existing_ticker = crud.get_security_by_ticker(db, isin)
+    if existing_ticker:
+        return existing_ticker
+    
+    sec_data = schemas.SecurityCreate(
+        ticker=isin,
+        name=f"Bond {isin}",
+        security_type="bond",
+        isin=isin,
+    )
+    return await create_security(data=sec_data, db=db)
 
 
 @router.delete("/{security_id}", status_code=204)

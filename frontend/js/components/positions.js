@@ -58,7 +58,6 @@ const PositionsComponent = {
         menu.className = 'pos-context-menu';
         menu.style.cssText = `
             position: fixed;
-            top: ${event.clientY}px;
             left: ${event.clientX}px;
             background: var(--bg-secondary);
             border: 1px solid var(--border);
@@ -68,6 +67,18 @@ const PositionsComponent = {
             min-width: 200px;
             box-shadow: var(--shadow);
         `;
+
+        // Temporarily add to body to measure height, then reposition
+        document.body.appendChild(menu);
+        const menuHeight = menu.offsetHeight;
+        const spaceBelow = window.innerHeight - event.clientY - 10;
+        if (spaceBelow < menuHeight) {
+            menu.style.top = Math.max(10, event.clientY - menuHeight) + 'px';
+        } else {
+            menu.style.top = event.clientY + 'px';
+        }
+        // Remove and re-add properly below
+        menu.remove();
 
         const items = [
             { icon: '🟢', label: 'Купить', action: () => this.buy(pos) },

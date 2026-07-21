@@ -1,6 +1,7 @@
 """
 JWT Authentication module
 """
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from jose import JWTError, jwt
@@ -8,11 +9,14 @@ from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-# Hardcoded user for now
+# User credentials — password from environment variable
+# For production (Render), set BORIS_PASSWORD in Dashboard Environment Variables
+# For local development, falls back to the default password
+_BORIS_PASSWORD = os.getenv("BORIS_PASSWORD", "Maelstormer5")
 USERS = {
     "boris": {
         "username": "boris",
-        "password": "Maelstormer5",
+        "password": _BORIS_PASSWORD,
         "full_name": "Boris",
     }
 }

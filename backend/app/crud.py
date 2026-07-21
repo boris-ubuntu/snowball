@@ -503,6 +503,52 @@ def create_dividend(db: Session, data: schemas.DividendCreate) -> models.Dividen
     return dividend
 
 
+# === Portfolio Snapshots ===
+def get_snapshot_before_date(db: Session, portfolio_id: int, before_date: date) -> Optional[models.PortfolioSnapshot]:
+    """Get the latest snapshot strictly before the given date."""
+    return (
+        db.query(models.PortfolioSnapshot)
+        .filter(
+            models.PortfolioSnapshot.portfolio_id == portfolio_id,
+            models.PortfolioSnapshot.snapshot_date < before_date,
+        )
+        .order_by(desc(models.PortfolioSnapshot.snapshot_date))
+        .first()
+    )
+
+
+def upsert_snapshot(db: Session, portfolio_id: int, snapshot_date: date,
+                    total_value: float, total_invested: float,
+                    total_return: float, total_return_percent: float) -> models.PortfolioSnapshot:
+    """Create or update a snapshot for the given date."""
+    snapshot = (
+        db.query(models.PortfolioSnapshot)
+        .filter(
+            models.PortfolioSnapshot.portfolio_id == portfolio_id,
+            models.PortfolioSnapshot.snapshot_date == snapshot_date,
+        )
+        .first()
+    )
+    if snapshot:
+        snapshot.total_value = total_value
+        snapshot.total_invested = total_invested
+        snapshot.total_return = total_return
+        snapshot.total_return_percent = total_return_percent
+    else:
+        snapshot = models.PortfolioSnapshot(
+            portfolio_id=portfolio_id,
+            snapshot_date=snapshot_date,
+            total_value=total_value,
+            total_invested=total_invested,
+            total_return=total_return,
+            total_return_percent=total_return_percent,
+        )
+        db.add(snapshot)
+    db.commit()
+    db.refresh(snapshot)
+    return snapshot
+
+
 # === Dashboard ===
 async def get_dashboard(db: Session, portfolio_id: int) -> dict:
     positions = get_positions(db, portfolio_id)
@@ -699,6 +745,12 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
                             cd = datetime.strptime(cd_str, "%Y-%m-%d").date()
                             if today <= cd <= one_year:
                                 value_per = coup.get("value_rub", coup.get("value", 0))
+                                # Detect amortizations in old cache entries (no is_amortization field)
+                                # Amortization is typically > 30% of facevalue, coupon is < 20%
+                                facevalue = coup.get("facevalue", 1000)
+                                is_amort = coup.get("is_amortization", False)
+                                if not is_amort and facevalue > 0 and value_per > facevalue * 0.3:
+                                    is_amort = True
                                 all_coups.append({
                                     "ticker": sec.ticker,
                                     "name": sec.name,
@@ -707,6 +759,7 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
                                     "value_per_bond": value_per,
                                     "quantity": sec_ref.quantity,
                                     "total_expected": value_per * sec_ref.quantity,
+                                    "is_amortization": is_amort,
                                 })
                         except (KeyError, ValueError, TypeError) as e:
                             logger.debug(f"Skipping malformed coupon entry for {sec.ticker}: {e}")
@@ -738,13 +791,31 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
                     sec = get_security_by_ticker(db, c.get("ticker"))
                     if sec and (sec.id, c["coupon_date"]) in accrued_keys:
                         continue  # уже начислено -> не ждём
+                    # Skip amortizations — they are return of capital, not income
+                    if c.get("is_amortization"):
+                        continue
                     expected_annual_income += c.get("total_expected", 0)
             except (KeyError, ValueError, TypeError) as e:
                 logger.debug(f"Skipping malformed coupon entry in income calc: {e}")
 
+        # Добавляем LQDT projection в expected_annual_income
+        lqdt_proj = []
+        try:
+            from .services.lqdt_service import get_lqdt_projection
+            lqdt_proj = await get_lqdt_projection(db, portfolio_id)
+            for mp in lqdt_proj:
+                expected_annual_income += mp.get("total", 0)
+        except Exception as e:
+            logger.debug(f"Could not add LQDT projection to expected income: {e}")
+
         # Рассчитываем доходность от стоимости только тех активов, которые платят
         # дивиденды/купоны в следующие 12 месяцев
         paying_security_ids = set()
+        # LQDT уже учтён в expected_annual_income, добавляем его в знаменатель доходности
+        if lqdt_proj:
+            lqdt_sec = get_security_by_ticker(db, "LQDT")
+            if lqdt_sec:
+                paying_security_ids.add(lqdt_sec.id)
         for d in all_divs:
             try:
                 d_date = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
@@ -758,6 +829,9 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
             try:
                 c_date = datetime.strptime(c["coupon_date"], "%Y-%m-%d").date()
                 if today <= c_date <= one_year:
+                    # Skip amortizations — they are return of capital, not income
+                    if c.get("is_amortization"):
+                        continue
                     sec = get_security_by_ticker(db, c.get("ticker"))
                     if sec:
                         paying_security_ids.add(sec.id)
@@ -799,7 +873,170 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
 
     recent_txns = get_transactions(db, portfolio_id, limit=10)
 
+    # === Build monthly histogram (13 buckets) ===
+    monthly_histogram = []
+    upcoming_payments = []
 
+    try:
+        from collections import defaultdict
+        from datetime import timedelta
+
+        # Collect all items: dividends + coupons (non-amort) + LQDT
+        all_items = []
+
+        # Dividends
+        for d in all_divs:
+            try:
+                dd = datetime.strptime(d["registry_close_date"], "%Y-%m-%d").date()
+                if today <= dd <= one_year:
+                    sec = get_security_by_ticker(db, d.get("ticker"))
+                    if sec and (sec.id, d["registry_close_date"]) in accrued_keys:
+                        continue
+                    all_items.append({
+                        "date": dd,
+                        "ticker": d["ticker"],
+                        "name": d["name"],
+                        "total_expected": d.get("total_expected", 0),
+                        "is_amortization": False,
+                        "source": d.get("source", "dividend"),
+                        "type": "dividend",
+                    })
+            except:
+                pass
+
+        # Coupons (non-amort)
+        for c in all_coups:
+            try:
+                cd = datetime.strptime(c["coupon_date"], "%Y-%m-%d").date()
+                if today <= cd <= one_year:
+                    sec = get_security_by_ticker(db, c.get("ticker"))
+                    if sec and (sec.id, c["coupon_date"]) in accrued_keys:
+                        continue
+                    if c.get("is_amortization"):
+                        continue
+                    all_items.append({
+                        "date": cd,
+                        "ticker": c["ticker"],
+                        "name": c["name"],
+                        "total_expected": c.get("total_expected", 0),
+                        "is_amortization": False,
+                        "source": "coupon",
+                        "type": "coupon",
+                    })
+            except:
+                pass
+
+        # LQDT projection — one entry per month (last day of month)
+        try:
+            from .services.lqdt_service import get_lqdt_projection
+            from calendar import monthrange
+            lqdt_proj = await get_lqdt_projection(db, portfolio_id)
+            for mp in lqdt_proj:
+                try:
+                    month_first = mp["date"]
+                    if isinstance(month_first, str):
+                        month_first = datetime.strptime(month_first, "%Y-%m-%d").date()
+                    # Last day of month
+                    last_day = monthrange(month_first.year, month_first.month)[1]
+                    ld = date(month_first.year, month_first.month, last_day)
+                    if today <= ld <= one_year:
+                        all_items.append({
+                            "date": ld,
+                            "ticker": "LQDT",
+                            "name": "LQDT Money Market",
+                            "total_expected": mp.get("total", 0),
+                            "is_amortization": False,
+                            "source": "lqdt",
+                            "type": "dividend",
+                        })
+                except:
+                    pass
+        except Exception as e:
+            logger.debug(f"Could not add LQDT to histogram: {e}")
+
+        # Also add amortizations for histogram (shown separately)
+        for c in all_coups:
+            try:
+                cd = datetime.strptime(c["coupon_date"], "%Y-%m-%d").date()
+                if today <= cd <= one_year and c.get("is_amortization"):
+                    all_items.append({
+                        "date": cd,
+                        "ticker": c["ticker"],
+                        "name": c["name"],
+                        "total_expected": c.get("total_expected", 0),
+                        "is_amortization": True,
+                        "source": "amortization",
+                        "type": "amortization",
+                    })
+            except:
+                pass
+
+        # Build 13 buckets
+        buckets = []
+        for i in range(13):
+            month_start = today.replace(day=1) + timedelta(days=32 * i)
+            month_start = month_start.replace(day=1)
+            if i == 0:
+                month_start = today
+            month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+            if i == 12:
+                month_end = today + timedelta(days=365)
+            buckets.append({
+                "month": month_start.strftime("%Y-%m"),
+                "start": month_start,
+                "end": month_end,
+                "total": 0,
+                "items": [],
+            })
+
+        for item in all_items:
+            for bucket in buckets:
+                if bucket["start"] <= item["date"] <= bucket["end"]:
+                    bucket["total"] += item["total_expected"]
+                    bucket["items"].append(schemas.HistogramItem(
+                        ticker=item["ticker"],
+                        name=item["name"],
+                        total_expected=item["total_expected"],
+                        is_amortization=item["is_amortization"],
+                        source=item["source"],
+                    ))
+                    break
+
+        monthly_histogram = [
+            schemas.HistogramBucket(month=b["month"], total=round(b["total"], 2), items=b["items"])
+            for b in buckets
+        ]
+
+        # Flat list of upcoming payments (for dividends page)
+        for item in sorted(all_items, key=lambda x: x["date"]):
+            upcoming_payments.append(schemas.UpcomingPayment(
+                ticker=item["ticker"],
+                name=item["name"],
+                date=item["date"].strftime("%Y-%m-%d"),
+                total_expected=item["total_expected"],
+                type=item["type"],
+                source=item["source"],
+            ))
+
+    except Exception as e:
+        logger.error(f"Error building monthly histogram: {e}")
+
+    # === Daily P&L ===
+    today = date.today()
+    daily_pl = 0.0
+    try:
+        # Upsert snapshot for today
+        upsert_snapshot(db, portfolio_id, today,
+                        total_value=round(total_value, 2),
+                        total_invested=round(total_invested, 2),
+                        total_return=round(total_return, 2),
+                        total_return_percent=round(total_return_percent, 2))
+        # Get yesterday's snapshot (strictly before today)
+        yesterday_snap = get_snapshot_before_date(db, portfolio_id, today)
+        if yesterday_snap:
+            daily_pl = round(total_value - yesterday_snap.total_value, 2)
+    except Exception as e:
+        logger.error(f"Error calculating daily P&L: {e}")
 
     return schemas.DashboardResponse(
         portfolio=schemas.PortfolioSummary(
@@ -814,9 +1051,10 @@ async def get_dashboard(db: Session, portfolio_id: int) -> dict:
             total_return_12m=round(total_return_12m, 2),
             total_invested_12m=round(total_invested_12m, 2),
             realized_profit_12m=round(realized_profit_12m, 2),
+            daily_pl=daily_pl,
         ),
-
         positions=position_list,
-
         recent_transactions=recent_txns,
+        monthly_histogram=monthly_histogram,
+        upcoming_payments=upcoming_payments,
     )

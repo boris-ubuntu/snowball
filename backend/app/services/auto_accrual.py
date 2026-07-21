@@ -99,6 +99,10 @@ async def check_and_process_accruals(db: Session, portfolio_id: int) -> Dict:
     # Process historical coupons for bonds/OFZ
     coupons = await get_portfolio_coupons(db, portfolio_id, upcoming_only=False)
     for coup in coupons:
+        # Skip amortizations — they are return of capital, not income
+        if coup.get("is_amortization"):
+            continue
+
         try:
             coup_date = datetime.strptime(coup["coupon_date"], "%Y-%m-%d").date()
         except (ValueError, TypeError):

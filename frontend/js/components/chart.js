@@ -27,11 +27,12 @@ const ChartComponent = {
             // Group by asset class: акции, офз, фонды, валюта
             const classMap = {
                 'Акции': ['stock'],
-                'ОФЗ': ['ofz', 'bond'],
+                'ОФЗ': ['ofz'],
+                'Облигации': ['bond'],
                 'Фонды': ['etf'],
                 'Валюта': ['currency'],
             };
-            const classTotals = { 'Акции': 0, 'ОФЗ': 0, 'Фонды': 0, 'Валюта': 0 };
+            const classTotals = { 'Акции': 0, 'ОФЗ': 0, 'Облигации': 0, 'Фонды': 0, 'Валюта': 0 };
             for (const p of sorted) {
                 let found = false;
                 for (const [cls, types] of Object.entries(classMap)) {

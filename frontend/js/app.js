@@ -1,31 +1,29 @@
 const App = {
     portfolioId: null,
-    dashboardData: null,  // Кеш для данных главной страницы
+    dashboardData: null,
 
     async init() {
-        // Check if already authenticated
         const token = API.getToken();
         if (token) {
-            // Try to load the app with existing token
             this.showApp();
             await this.initApp();
         } else {
-            // Show login page
             this.showLogin();
         }
 
-        // Login form handler
         document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             await this.handleLogin();
         });
 
-        // Logout button
         document.getElementById('logout-btn').addEventListener('click', () => {
             this.logout();
         });
 
-        // Economy modal close
+        document.getElementById('refresh-btn').addEventListener('click', () => {
+            this.refreshAllData();
+        });
+
         const economyOverlay = document.getElementById('economy-modal-overlay');
         const economyCloseBtn = document.getElementById('close-economy-modal');
         if (economyCloseBtn) {
@@ -37,7 +35,6 @@ const App = {
             });
         }
 
-        // Cards open hidden tabs
         document.getElementById('card-total').addEventListener('click', () => {
             this.showPage('assets');
             this.loadAssetsPositions();
@@ -52,23 +49,20 @@ const App = {
             DividendsComponent.load(this.portfolioId);
         });
 
-        // Back buttons on hidden pages
         document.querySelectorAll('.back-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
+            btn.addEventListener('click', async () => {
                 this.showPage('main');
-                this.loadDashboard();
-                DividendsHistogram.load(this.portfolioId);
+                await this.loadDashboard();
+                DividendsHistogram.load(this.portfolioId, this.dashboardData);
             });
         });
 
-        // Chart mode toggle
         document.getElementById('chart-mode-toggle').addEventListener('change', (e) => {
             if (this.dashboardData) {
                 ChartComponent.render(this.dashboardData, e.target.checked);
             }
         });
 
-        // Add security modal
         document.getElementById('close-add-modal').addEventListener('click', () => this.closeAddSecurityModal());
         document.getElementById('cancel-add-btn').addEventListener('click', () => this.closeAddSecurityModal());
         document.getElementById('add-security-modal-overlay').addEventListener('click', (e) => {
@@ -76,10 +70,8 @@ const App = {
         });
         document.getElementById('add-security-form').addEventListener('submit', (e) => this.handleAddSecurity(e));
 
-        // Init securities manager
         SecuritiesManager.init();
 
-        // Header transaction button opens modal
         document.getElementById('add-transaction-header-btn').addEventListener('click', () => this.openTransactionModal());
     },
 
@@ -109,7 +101,6 @@ const App = {
             API.setToken(result.access_token);
             errorEl.classList.add('hidden');
             this.showApp();
-            // Initialize the app now that we're logged in
             if (!this.portfolioId) {
                 await this.initApp();
             } else {
@@ -128,43 +119,29 @@ const App = {
         this.dashboardData = null;
         this.portfolioId = null;
         this.showLogin();
-        // Clear form fields
         document.getElementById('login-username').value = '';
         document.getElementById('login-password').value = '';
     },
 
     async initApp() {
-        // Set current date
         document.getElementById('current-date').textContent =
             new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 
-        // Get default portfolio
         try {
             const portfolio = await API.getDefaultPortfolio();
             this.portfolioId = portfolio.id;
             console.log(`Portfolio: ${portfolio.name} (id=${portfolio.id})`);
 
-            // Init modal
             await ModalComponent.init(this.portfolioId);
 
-            // Load dashboard + histogram + securities in parallel
-            await Promise.all([
-                this.loadDashboard(),
-                DividendsHistogram.load(this.portfolioId).catch(() => {}),
-                SecuritiesManager.load(this.portfolioId).catch(() => {}),
-            ]);
+            // Load dashboard FIRST — sets this.dashboardData
+            await this.loadDashboard();
 
-            // Re-render chart and summary with histogram data
-            if (this.dashboardData) {
-                ChartComponent.render(this.dashboardData, document.getElementById('chart-mode-toggle')?.checked || false);
-                SummaryComponent.render(this.dashboardData);
-            }
-
-            // Подтягиваем свежие цены/курсы после фонового обновления на бэкенде
-            this.scheduleDashboardSync();
+            // Then render histogram and securities with the loaded data
+            DividendsHistogram.load(this.portfolioId, this.dashboardData);
+            SecuritiesManager.load(this.portfolioId).catch(() => {});
         } catch (e) {
             console.error('Failed to initialize:', e);
-            // If token expired, go back to login
             if (e.message && (e.message.includes('401') || e.message.includes('Необходима авторизация'))) {
                 this.logout();
             }
@@ -207,25 +184,14 @@ const App = {
 
     async handleAddSecurity(e) {
         e.preventDefault();
-
         const ticker = document.getElementById('sec-ticker').value.trim().toUpperCase();
         const name = document.getElementById('sec-name').value.trim();
         const isin = document.getElementById('sec-isin').value.trim().toUpperCase() || null;
         const type = document.getElementById('sec-type').value;
-
         if (!ticker || !name) return;
-
         try {
-            await API.createSecurity({
-                ticker: ticker,
-                name: name,
-                security_type: type,
-                isin: isin,
-            });
-
+            await API.createSecurity({ ticker, name, security_type: type, isin });
             this.closeAddSecurityModal();
-
-            // Reload securities list and modal
             await SecuritiesManager.load(this.portfolioId);
             if (typeof ModalComponent !== 'undefined' && ModalComponent.loadSecurities) {
                 await ModalComponent.loadSecurities();
@@ -237,17 +203,8 @@ const App = {
 
     async loadDashboard(forceRefresh = false) {
         if (!this.portfolioId) return;
-
-        // Если есть кеш и не требуется принудительное обновление - используем его
-        if (this.dashboardData && !forceRefresh) {
-            console.log('📊 Используем кешированные данные дашборда');
-            this.renderDashboard(this.dashboardData);
-            return;
-        }
-
         try {
             const data = await API.getDashboard(this.portfolioId);
-            // Сохраняем в кеш
             this.dashboardData = data;
             this.renderDashboard(data);
         } catch (e) {
@@ -256,57 +213,30 @@ const App = {
         }
     },
 
-    // После первой загрузки бэкенд обновляет цены/курсы в фоне (MOEX, ЦБ РФ).
-    // Один отложенный перезапрос, чтобы подхватить свежие цены, НО без мерцания:
-    // не перерисовываем, если новые данные хуже (например, total_value упал до 0
-    // из-за ещё не обновлённых цен). Это убирает эффект «то 0.00, то значения».
-    scheduleDashboardSync() {
-        if (this._syncTimer) return; // уже запланировано
-        const delay = 4000; // мс — ждём, пока фоновое обновление отработает
-        this._syncTimer = setTimeout(async () => {
-            this._syncTimer = null;
-            try {
-                const data = await API.getDashboard(this.portfolioId);
-                const newTotal = data && data.portfolio ? data.portfolio.total_value : 0;
-                const oldTotal = this.dashboardData && this.dashboardData.portfolio
-                    ? this.dashboardData.portfolio.total_value : 0;
-                // Не перезаписываем хорошие данные нулями (цены ещё не подгрузились)
-                if (newTotal > 0 || oldTotal === 0) {
-                    this.dashboardData = data;
-                    if (!document.getElementById('page-main').classList.contains('hidden')) {
-                        this.renderDashboard(data);
-                    }
-                }
-            } catch (e) {
-                // игнорируем ошибки фоновой синхронизации
-            }
-        }, delay);
-    },
-
     renderDashboard(data) {
-        // Render all components on main page
         SummaryComponent.render(data);
         ChartComponent.render(data, document.getElementById('chart-mode-toggle')?.checked || false);
-        // Positions are now shown on assets page, not main page
     },
 
-    async refreshPrices() {
+    async refreshAllData() {
+        const btn = document.getElementById('refresh-btn');
+        btn.disabled = true;
+        btn.textContent = '⏳ Обновление...';
         try {
-            const result = await API.refreshPrices();
-            console.log(`Prices refreshed: ${result.updated}`);
-            await this.loadDashboard(true);
+            await API.refreshAllData(this.portfolioId);
+            alert('✅ Данные обновлены. Перезагрузите страницу для применения.');
         } catch (e) {
-            console.error('Failed to refresh prices:', e);
+            alert('❌ Ошибка: ' + e.message);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '🔄 Обновить данные';
         }
     },
 
-    // Метод для сброса кеша при добавлении новой сделки
     async refreshDashboard() {
         this.dashboardData = null;
         await this.loadDashboard(true);
-        // Also refresh dividends histogram
         await DividendsHistogram.load(this.portfolioId);
-        // Re-render chart and summary with histogram data
         if (this.dashboardData) {
             ChartComponent.render(this.dashboardData, document.getElementById('chart-mode-toggle')?.checked || false);
             SummaryComponent.render(this.dashboardData);
@@ -334,10 +264,8 @@ const ConfirmDialog = {
             const textEl = document.getElementById('confirm-text');
             const yesBtn = document.getElementById('confirm-yes');
             const noBtn = document.getElementById('confirm-no');
-
             textEl.textContent = text;
             overlay.classList.remove('hidden');
-
             const cleanup = () => {
                 overlay.classList.add('hidden');
                 yesBtn.removeEventListener('click', onYes);
@@ -347,7 +275,6 @@ const ConfirmDialog = {
             const onYes = () => { cleanup(); resolve(true); };
             const onNo = () => { cleanup(); resolve(false); };
             const onOverlay = (e) => { if (e.target === overlay) { cleanup(); resolve(false); } };
-
             yesBtn.addEventListener('click', onYes);
             noBtn.addEventListener('click', onNo);
             overlay.addEventListener('click', onOverlay);
@@ -355,14 +282,10 @@ const ConfirmDialog = {
     }
 };
 
-// Register Service Worker for PWA
+// Register passive Service Worker (replaces old cache-based SW)
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').then((reg) => {
-            console.log('✅ SW registered:', reg.scope);
-        }).catch((err) => {
-            console.log('❌ SW registration failed:', err);
-        });
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
     });
 }
 

@@ -11,5 +11,7 @@ services:
         sync: false
       - key: SECRET_KEY
         generateValue: true
+      - key: BORIS_PASSWORD
+        sync: false
     healthCheckPath: /api/health
     autoDeploy: true

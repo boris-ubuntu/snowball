@@ -36,7 +36,13 @@ const ModalComponent = {
         ).slice(0, 50);
 
         if (filtered.length === 0) {
-            select.innerHTML = '<option value="">— Ничего не найдено —</option>';
+            // Check if query looks like an ISIN (12 chars, starts with 2 letters)
+            const isIsin = /^[A-Z]{2}[A-Z0-9]{10}$/.test(q);
+            if (isIsin) {
+                select.innerHTML = `<option value="__CREATE_BY_ISIN__">➕ Добавить по ISIN ${q}</option>`;
+            } else {
+                select.innerHTML = '<option value="">— Ничего не найдено —</option>';
+            }
             return;
         }
 
@@ -129,13 +135,33 @@ const ModalComponent = {
     async handleSubmit(e) {
         e.preventDefault();
 
-        const securityId = parseInt(document.getElementById('ticker-select').value);
+        const select = document.getElementById('ticker-select');
+        const selectedValue = select.value;
         const type = document.querySelector('input[name="tx-type"]:checked').value;
         const quantity = parseFloat(document.getElementById('tx-quantity').value);
         const price = parseFloat(document.getElementById('tx-price').value);
         const commission = parseFloat(document.getElementById('tx-commission').value) || 0;
         const date = document.getElementById('tx-date').value;
         const notes = document.getElementById('tx-notes').value.trim() || null;
+
+        // Handle "create by ISIN" option
+        let securityId;
+        if (selectedValue === '__CREATE_BY_ISIN__') {
+            const searchQuery = document.getElementById('ticker-search').value.trim().toUpperCase();
+            const isinMatch = searchQuery.match(/[A-Z]{2}[A-Z0-9]{10}/);
+            const isin = isinMatch ? isinMatch[0] : searchQuery;
+            try {
+                const newSec = await API.createSecurityByIsin(isin);
+                securityId = newSec.id;
+                // Add to local cache
+                this.securities.push(newSec);
+            } catch (err) {
+                alert('Ошибка при создании актива: ' + err.message);
+                return;
+            }
+        } else {
+            securityId = parseInt(selectedValue);
+        }
 
         if (!securityId) {
             alert('Выберите ценную бумагу из списка');

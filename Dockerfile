@@ -22,5 +22,6 @@ COPY frontend/ /frontend/
 
 EXPOSE 8000
 
-# Use uvicorn with workers for production
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# Use uvicorn for production — single worker fits Render free tier (512 MB RAM)
+# Override with WEB_CONCURRENCY env var if needed
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

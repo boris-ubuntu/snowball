@@ -39,43 +39,45 @@ def _first_positive_price(entries: List[Dict[str, Any]], *keys: str) -> Optional
 
 
 async def _fetch_bond_price(client: httpx.AsyncClient, ticker: str) -> Optional[float]:
-    """Fetch price (in RUB) for a bond/OFZ from MOEX TQOB board.
-    PREVPRICE/LAST for bonds are a percentage of face value."""
-    url = (
-        f"{MOEX_BASE}/engines/stock/markets/bonds/boards/TQOB/securities/{ticker}.json"
-        "?iss.meta=off&securities.columns=SECID,PREVPRICE,LAST,FACEVALUE"
-    )
-    try:
-        resp = await client.get(url)
-    except Exception as e:
-        logger.warning(f"⚠️ Ошибка запроса для {ticker}: {e}")
-        return None
-
-    if resp.status_code != 200:
-        logger.warning(f"⚠️ MOEX вернул {resp.status_code} для {ticker}")
-        return None
-
-    entries = _rows_as_dicts(resp.json(), "securities")
-    for entry in entries:
-        price_raw = entry.get("PREVPRICE") or entry.get("LAST")
-        if price_raw is None:
-            continue
+    """Fetch price (in RUB) for a bond/OFZ from MOEX.
+    Tries TQOB first, then TQCB (corporate bonds)."""
+    boards = ["TQOB", "TQCB"]
+    for board in boards:
+        url = (
+            f"{MOEX_BASE}/engines/stock/markets/bonds/boards/{board}/securities/{ticker}.json"
+            "?iss.meta=off&securities.columns=SECID,PREVPRICE,LAST,FACEVALUE"
+        )
         try:
-            price_percent = float(price_raw)
-        except (ValueError, TypeError) as e:
-            logger.warning(f"⚠️ Ошибка конвертации цены для {ticker}: {e}")
+            resp = await client.get(url)
+        except Exception as e:
+            logger.debug(f"⚠️ Ошибка запроса для {ticker} на {board}: {e}")
             continue
-        if price_percent <= 0:
+
+        if resp.status_code != 200:
+            logger.debug(f"⚠️ MOEX вернул {resp.status_code} для {ticker} на {board}")
             continue
-        try:
-            face_value = float(entry.get("FACEVALUE") or 0)
-        except (ValueError, TypeError):
-            face_value = 0
-        if face_value <= 0:
-            face_value = OFZ_FACE_VALUE
-        price_rub = price_percent / 100.0 * face_value
-        logger.info(f"✅ Получена цена для ОФЗ {ticker}: {price_rub} ₽ ({price_percent}% от номинала {face_value})")
-        return price_rub
+
+        entries = _rows_as_dicts(resp.json(), "securities")
+        for entry in entries:
+            price_raw = entry.get("PREVPRICE") or entry.get("LAST")
+            if price_raw is None:
+                continue
+            try:
+                price_percent = float(price_raw)
+            except (ValueError, TypeError) as e:
+                logger.debug(f"⚠️ Ошибка конвертации цены для {ticker} на {board}: {e}")
+                continue
+            if price_percent <= 0:
+                continue
+            try:
+                face_value = float(entry.get("FACEVALUE") or 0)
+            except (ValueError, TypeError):
+                face_value = 0
+            if face_value <= 0:
+                face_value = OFZ_FACE_VALUE
+            price_rub = price_percent / 100.0 * face_value
+            logger.info(f"✅ Получена цена для {ticker} на {board}: {price_rub} ₽ ({price_percent}% от номинала {face_value})")
+            return price_rub
 
     return None
 
@@ -105,37 +107,31 @@ async def _fetch_share_price(client: httpx.AsyncClient, ticker: str, board: str)
 
 
 async def get_current_price(
-    db: Session,
     ticker: str,
     isin: Optional[str] = None,
     security_type: Optional[str] = None,
-    force_refresh: bool = False,
 ) -> Optional[float]:
     """
-    Fetch current market price for a security from MOEX ISS API with caching.
+    Fetch current market price for a security from MOEX ISS API.
+    No caching — always fetches fresh data.
     """
-    if not force_refresh:
-        cached = get_cached_data(db, ticker, 'price')
-        if cached is not None and len(cached) > 0:
-            logger.debug(f"Using cached price for {ticker}")
-            return cached[0].get('price')
-
     async with httpx.AsyncClient(timeout=10.0) as client:
         price: Optional[float] = None
 
         if security_type in ("bond", "ofz"):
             price = await _fetch_bond_price(client, ticker)
+            # If bond price not found by ticker, try by ISIN
+            if price is None and isin:
+                price = await _fetch_bond_price(client, isin)
         elif security_type == "currency":
             price = await _fetch_currency_rate(ticker)
         else:
             board = "TQTF" if security_type == "etf" else "TQBR"
             price = await _fetch_share_price(client, ticker, board)
             if price is None and security_type != "etf":
-                # Some depositary receipts trade on TQBD instead of TQBR
                 price = await _fetch_share_price(client, ticker, "TQBD")
 
         if price is not None and price > 0:
-            set_cached_data(db, ticker, 'price', [{'price': price}], ttl_minutes=5)
             logger.info(f"✅ Получена цена для {ticker}: {price}")
             return price
 
@@ -173,7 +169,7 @@ async def refresh_all_prices(db: Session) -> int:
 
     for sec in securities:
         try:
-            price = await get_current_price(db, sec.ticker, sec.isin, sec.security_type, force_refresh=True)
+            price = await get_current_price(sec.ticker, sec.isin, sec.security_type)
             if price is not None and price > 0:
                 sec.current_price = price
                 sec.price_updated_at = datetime.now(timezone.utc)

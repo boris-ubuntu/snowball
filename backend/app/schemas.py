@@ -21,6 +21,10 @@ class SecurityCreate(SecurityBase):
     pass
 
 
+class SecurityCreateByIsin(BaseModel):
+    isin: str
+
+
 class SecurityUpdate(BaseModel):
     name: Optional[str] = None
     short_name: Optional[str] = None
@@ -194,8 +198,8 @@ class PortfolioSummary(BaseModel):
     total_return_12m: float = 0  # Total profit from transactions in last 12 months
     total_invested_12m: float = 0  # Total invested (buy) in last 12 months
     realized_profit_12m: float = 0  # Profit from buy/sell (without accruals) in last 12 months
-
-
+    # Daily P&L — change in total_value since previous day
+    daily_pl: float = 0
 
 
 class DashboardPosition(BaseModel):
@@ -216,7 +220,32 @@ class DashboardPosition(BaseModel):
     share: float = 0  # Доля в портфеле
 
 
+class HistogramItem(BaseModel):
+    ticker: str
+    name: str
+    total_expected: float = 0
+    is_amortization: bool = False
+    source: str = "coupon"  # coupon, dividend, projected, lqdt
+
+
+class HistogramBucket(BaseModel):
+    month: str  # YYYY-MM
+    total: float = 0
+    items: List[HistogramItem] = []
+
+
+class UpcomingPayment(BaseModel):
+    ticker: str
+    name: str
+    date: str  # YYYY-MM-DD
+    total_expected: float = 0
+    type: str = ""  # coupon, dividend, amortization
+    source: str = ""
+
+
 class DashboardResponse(BaseModel):
     portfolio: PortfolioSummary
     positions: List[DashboardPosition] = []
     recent_transactions: List[TransactionResponse] = []
+    monthly_histogram: List[HistogramBucket] = []
+    upcoming_payments: List[UpcomingPayment] = []

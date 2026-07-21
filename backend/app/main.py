@@ -84,6 +84,7 @@ def on_startup():
         thread = threading.Thread(target=load_moex, daemon=True)
         thread.start()
 
+
     except Exception as e:
         logger.error(f"Database initialization error: {e}")
         logger.error("Make sure PostgreSQL is running and the database exists")
@@ -117,10 +118,6 @@ if frontend_path.exists():
     @app.get("/manifest.json")
     def serve_manifest():
         return FileResponse(str(frontend_path / "manifest.json"), media_type="application/manifest+json")
-
-    @app.get("/sw.js")
-    def serve_sw():
-        return FileResponse(str(frontend_path / "sw.js"), media_type="application/javascript")
 
     @app.api_route("/{full_path:path}", methods=["GET"])
     def serve_static(full_path: str):

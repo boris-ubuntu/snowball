@@ -48,11 +48,11 @@ const SummaryComponent = {
             yieldValueEl.className = 'card-value ' + colorClass;
         }
 
-        // Подпись: общая доходность
+        // Подпись: дневной P/L
         if (yieldSubEl) {
-            const pctTotal = summary.total_return_percent || 0;
-            const prefix_ = pctTotal >= 0 ? '▲' : '▼';
-            yieldSubEl.textContent = `За 12 мес: ${prefix_} ${Utils.formatPercent(Math.abs(pctTotal))}`;
+            const dailyPl = summary.daily_pl || 0;
+            const prefix_ = dailyPl >= 0 ? '▲' : '▼';
+            yieldSubEl.textContent = `${prefix_} ${Utils.formatCurrency(Math.abs(dailyPl))} сегодня`;
         }
     },
 };

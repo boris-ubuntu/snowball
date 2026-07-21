@@ -27,3 +27,18 @@ pgdata/
 
 # Local tool state
 .ragcode/
+
+# Memory bank (development notes)
+memory-bank/
+
+# Test / debug output files
+dash_out.txt
+dash_out2.txt
+dashboard.json
+moex_cache_dump.json
+moex_dump.json
+moex_out.txt
+moex_output.txt
+fetch_moex_dump.py
+test.txt
+fron
