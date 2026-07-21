@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .. import schemas, crud, models
 from ..database import get_db
@@ -100,10 +100,10 @@ async def create_security(data: schemas.SecurityCreate, db: Session = Depends(ge
     
     # Try to fetch current price from MOEX
     try:
-        price = await get_current_price(security.ticker, security.isin)
+        price = await get_current_price(db, security.ticker, security.isin, security.security_type, force_refresh=True)
         if price is not None:
             security.current_price = price
-            security.price_updated_at = datetime.utcnow()
+            security.price_updated_at = datetime.now(timezone.utc)
             db.commit()
             db.refresh(security)
     except Exception as e:
@@ -118,10 +118,10 @@ async def refresh_security_price(security_id: int, db: Session = Depends(get_db)
     security = crud.get_security(db, security_id)
     if not security:
         raise HTTPException(status_code=404, detail="Security not found")
-    price = await get_current_price(security.ticker, security.isin)
+    price = await get_current_price(db, security.ticker, security.isin, security.security_type, force_refresh=True)
     if price is not None:
         security.current_price = price
-        security.price_updated_at = datetime.utcnow()
+        security.price_updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(security)
     return security

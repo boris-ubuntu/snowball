@@ -5,7 +5,7 @@ This ensures the dashboard loads fast from cache, with background refresh.
 """
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from sqlalchemy.orm import Session
 
@@ -30,11 +30,10 @@ async def refresh_all_prices_background(db: Session):
     so we don't hammer MOEX on every background cycle for already-fresh data.
     """
     from .. import models
-    from datetime import datetime, timedelta
 
     PRICE_MAX_AGE = timedelta(minutes=10)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     securities = (
         db.query(models.Security)
         .join(models.PortfolioPosition, models.PortfolioPosition.security_id == models.Security.id)
@@ -77,7 +76,7 @@ async def refresh_all_prices_background(db: Session):
                     price = data[0].get('price')
                     if price and price > 0:
                         sec.current_price = price
-                        sec.price_updated_at = datetime.utcnow()
+                        sec.price_updated_at = datetime.now(timezone.utc)
             except:
                 pass
     

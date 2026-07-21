@@ -3,7 +3,7 @@ import logging
 import asyncio
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .cache_service import get_cached_data, set_cached_data
 
@@ -176,7 +176,7 @@ async def refresh_all_prices(db: Session) -> int:
             price = await get_current_price(db, sec.ticker, sec.isin, sec.security_type, force_refresh=True)
             if price is not None and price > 0:
                 sec.current_price = price
-                sec.price_updated_at = datetime.utcnow()
+                sec.price_updated_at = datetime.now(timezone.utc)
                 updated += 1
                 logger.info(f"✅ Цена обновлена для {sec.ticker}: {price}")
             else:
